@@ -19,6 +19,7 @@ from openjarvis.cli._voice_chat import (
     read_voice_input,
     record_voice,
     speak,
+    transcribe_voice,
 )
 from openjarvis.core.config import load_config
 from openjarvis.core.events import EventBus
@@ -90,6 +91,12 @@ def _read_input(prompt: str = "You> ") -> Optional[str]:
     default=False,
     help="Keep listening after each spoken reply; Ctrl-C or 'goodbye Jarvis' exits.",
 )
+@click.option(
+    "--conversation",
+    is_flag=True,
+    default=False,
+    help="Keep listening and let speech interrupt playback (headphones recommended).",
+)
 @runtime_cli_options
 def chat(
     engine_key: str | None,
@@ -101,6 +108,7 @@ def chat(
     persona_name: str | None,
     voice_mode: bool,
     hands_free: bool,
+    conversation: bool,
     num_ctx: int | None,
     num_gpu: int | None,
     skip_runtime_panel: bool,
@@ -124,6 +132,8 @@ def chat(
     read back via text-to-speech (kokoro local or OpenAI TTS).
     """
     console = Console(stderr=True)
+    if conversation:
+        hands_free = True
     if hands_free:
         voice_mode = True
 
@@ -308,6 +318,10 @@ def chat(
 
     # Print banner
     voice_hint = (
+        "  [magenta]Conversation ON[/magenta] — speak naturally; you can interrupt "
+        "playback. Use headphones; say 'stop Jarvis' to exit.\n"
+        if conversation
+        else
         "  [magenta]Hands-free voice ON[/magenta] — speak when Listening appears; "
         "say 'goodbye Jarvis' or press Ctrl-C to exit.\n"
         if hands_free
@@ -377,17 +391,19 @@ def chat(
         history.append(Message(role=Role.SYSTEM, content=system_prompt))
 
     # REPL loop
+    pending_voice: str | None = None
     while True:
         for note in _notifications.diff(get_status()):
             console.print(f"[dim cyan]{note}[/dim cyan]")
 
         if voice_mode:
             assert voice_session is not None
-            result = (
+            result = pending_voice if pending_voice is not None else (
                 record_voice(console, voice_session, continuous=True)
                 if hands_free
                 else read_voice_input(console, voice_session)
             )
+            pending_voice = None
             if result is VOICE_EXIT:
                 console.print("\n[dim]Goodbye![/dim]")
                 break
@@ -533,7 +549,13 @@ def chat(
             console.print()
             if voice_mode:
                 assert voice_session is not None
-                speak(content, console, voice_session)
+                interruption = speak(
+                    content, console, voice_session, barge_in=conversation
+                )
+                if interruption:
+                    pending_voice = transcribe_voice(
+                        interruption, console, voice_session
+                    )
 
             publish_completed_exchange(
                 bus,

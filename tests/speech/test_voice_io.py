@@ -6,7 +6,7 @@ import struct
 import sys
 from types import SimpleNamespace
 
-from openjarvis.speech.voice_io import record_until_silence
+from openjarvis.speech.voice_io import play_wav_with_barge_in, record_until_silence
 
 
 class _FakeStream:
@@ -59,3 +59,31 @@ def test_post_speech_uses_normal_silence_window(monkeypatch) -> None:
     )
 
     assert stream.reads == 3
+
+
+def test_playback_stops_and_captures_spoken_interruption(monkeypatch) -> None:
+    import io
+    import wave
+
+    speech = struct.pack("1024h", *([1000] * 1024))
+    silence = bytes(1024 * 2)
+    stream = _FakeStream([speech] * 3 + [silence] * 24)
+    stops: list[bool] = []
+    playback = SimpleNamespace(active=True)
+    fake_sd = SimpleNamespace(
+        RawInputStream=lambda **kwargs: stream,
+        play=lambda *args: None,
+        get_stream=lambda: playback,
+        stop=lambda: stops.append(True),
+    )
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
+    monkeypatch.setitem(
+        sys.modules, "soundfile",
+        SimpleNamespace(read=lambda *args, **kwargs: ([0.0], 24000)),
+    )
+
+    result = play_wav_with_barge_in(b"audio")
+
+    assert stops
+    with wave.open(io.BytesIO(result)) as recorded:
+        assert recorded.getnframes() > 0

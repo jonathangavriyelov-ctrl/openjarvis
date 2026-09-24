@@ -124,4 +124,62 @@ def play_wav(audio: bytes, sample_rate: int = 24000) -> None:
     sd.wait()
 
 
-__all__ = ["play_wav", "record_until_silence"]
+def play_wav_with_barge_in(
+    audio: bytes,
+    sample_rate: int = 24000,
+    *,
+    silence_threshold: int = _SILENCE_THRESHOLD,
+) -> bytes:
+    """Play speech while monitoring the mic; return a spoken interruption as WAV.
+
+    Use headphones: the amplitude detector cannot distinguish the user's voice
+    from sound coming out of the computer's speakers.
+    """
+    import sounddevice as sd
+    import soundfile as sf
+
+    try:
+        data, sr = sf.read(io.BytesIO(audio), dtype="float32")
+    except Exception:
+        import numpy as np
+
+        data = np.frombuffer(audio[: len(audio) // 2 * 2], dtype="<i2").astype("float32") / 32768
+        sr = sample_rate
+
+    # Open the input before playback so the microphone remains active throughout.
+    with sd.RawInputStream(
+        samplerate=_SAMPLE_RATE, channels=_CHANNELS, dtype="int16", blocksize=_CHUNK
+    ) as mic:
+        sd.play(data, sr)
+        playback = sd.get_stream()
+        frames: list[bytes] = []
+        loud_chunks = 0
+        interrupted = False
+        silence_chunks = 0
+        max_chunks = int(_MAX_RECORD_SECONDS * _SAMPLE_RATE / _CHUNK)
+        try:
+            for _ in range(max_chunks):
+                if not interrupted and not playback.active:
+                    break
+                raw, _ = mic.read(_CHUNK)
+                chunk = bytes(raw)
+                loud = _rms(chunk) > silence_threshold
+                if not interrupted:
+                    frames.append(chunk)
+                    frames = frames[-8:]  # short lead-in so the first word survives
+                    loud_chunks = loud_chunks + 1 if loud else 0
+                    if loud_chunks < 3:
+                        continue
+                    interrupted = True
+                    sd.stop()
+                else:
+                    frames.append(chunk)
+                silence_chunks = 0 if loud else silence_chunks + 1
+                if silence_chunks >= int(_SILENCE_SECONDS * _SAMPLE_RATE / _CHUNK):
+                    break
+        finally:
+            sd.stop()
+    return _frames_to_wav(frames, _SAMPLE_RATE) if interrupted else b""
+
+
+__all__ = ["play_wav", "play_wav_with_barge_in", "record_until_silence"]

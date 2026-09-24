@@ -167,9 +167,14 @@ def record_voice(
     if not audio_bytes:
         return None
 
+    return transcribe_voice(audio_bytes, console, active_session)
+
+
+def transcribe_voice(audio_bytes: bytes, console: Any, session: VoiceSession) -> Optional[str]:
+    """Transcribe recorded WAV with the session's cached backend."""
     console.print("[dim]Transcribing…[/dim]")
     try:
-        result = backend.transcribe(audio_bytes, format="wav")
+        result = session.get_stt_backend().transcribe(audio_bytes, format="wav")
         text = result.text.strip()
         if text:
             console.print(f"[bold]You (voice):[/bold] {_terminal_safe_text(text)}")
@@ -181,9 +186,12 @@ def record_voice(
         return None
 
 
-def speak(text: str, console: Any, session: VoiceSession | None = None) -> None:
+def speak(
+    text: str, console: Any, session: VoiceSession | None = None, *,
+    barge_in: bool = False,
+) -> bytes:
     """Synthesize and play text, reusing a healthy backend for the session."""
-    from openjarvis.speech.voice_io import play_wav
+    from openjarvis.speech.voice_io import play_wav, play_wav_with_barge_in
 
     active_session = session or VoiceSession()
 
@@ -193,7 +201,7 @@ def speak(text: str, console: Any, session: VoiceSession | None = None) -> None:
         active_session.get_voice_preferences()
     except Exception as exc:
         console.print(f"[red]Invalid speech config: {_terminal_safe_text(exc)}[/red]")
-        return
+        return b""
 
     while (backend := active_session.get_tts_backend()) is not None:
         try:
@@ -203,8 +211,10 @@ def speak(text: str, console: Any, session: VoiceSession | None = None) -> None:
                 synth_kwargs["voice_id"] = voice_id
             result = backend.synthesize(text, **synth_kwargs)
             if result.audio:
+                if barge_in:
+                    return play_wav_with_barge_in(result.audio, sample_rate=result.sample_rate)
                 play_wav(result.audio, sample_rate=result.sample_rate)
-            return
+            return b""
         except Exception as exc:
             console.print(
                 f"[dim yellow]Voice backend "
@@ -217,6 +227,7 @@ def speak(text: str, console: Any, session: VoiceSession | None = None) -> None:
         "[dim yellow]No TTS backend available — install kokoro: "
         "pip install kokoro[/dim yellow]"
     )
+    return b""
 
 
-__all__ = ["VOICE_EXIT", "VoiceSession", "read_voice_input", "record_voice", "speak"]
+__all__ = ["VOICE_EXIT", "VoiceSession", "read_voice_input", "record_voice", "speak", "transcribe_voice"]

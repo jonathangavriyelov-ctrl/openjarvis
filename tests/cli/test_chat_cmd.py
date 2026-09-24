@@ -176,6 +176,35 @@ class TestChatCommand:
         speak.assert_called_once()
 
 
+def test_conversation_uses_interruption_as_next_turn() -> None:
+    engine = MagicMock()
+    engine.engine_id = "mock"
+    engine.generate.side_effect = [
+        {"content": "First answer"}, {"content": "Second answer"}
+    ]
+    config = JarvisConfig()
+    config.intelligence.default_model = "test-model"
+
+    with (
+        patch("openjarvis.cli.chat_cmd.load_config", return_value=config),
+        patch("openjarvis.engine.get_engine", return_value=("mock", engine)),
+        patch("openjarvis.intelligence.register_builtin_models"),
+        patch("openjarvis.cli.chat_cmd.record_voice", side_effect=["hello", "stop"])
+        as record,
+        patch("openjarvis.cli.chat_cmd.speak", side_effect=[b"wav", b""]) as spoken,
+        patch("openjarvis.cli.chat_cmd.transcribe_voice", return_value="another question"),
+        patch("builtins.input", side_effect=AssertionError("keyboard input requested")),
+    ):
+        result = CliRunner().invoke(chat, ["--conversation", "--model", "test-model"])
+
+    assert result.exit_code == 0, result.output
+    assert "Conversation ON" in result.output
+    assert record.call_count == 2
+    assert spoken.call_count == 2
+    assert all(call.kwargs["barge_in"] for call in spoken.call_args_list)
+    assert engine.generate.call_count == 2
+
+
 class TestReadInput:
     """Test the _read_input helper function."""
 
