@@ -405,10 +405,18 @@ def chat(
 
         # Handle slash commands
         cmd = user_input.lower()
-        if hands_free and cmd.strip(".!? ") in (
+        if hands_free and cmd.strip(".,!?;: ") in (
+            "stop",
+            "stop jarvis",
+            "jarvis stop",
             "goodbye jarvis",
+            "good bye jarvis",
+            "goodbye",
+            "good bye",
             "jarvis goodbye",
             "stop listening",
+            "quit",
+            "exit",
         ):
             console.print("[dim]Goodbye![/dim]")
             break

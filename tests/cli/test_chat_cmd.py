@@ -142,7 +142,12 @@ class TestChatCommand:
         assert result.exception is None
         assert "Goodbye!" in result.output
 
-    def test_hands_free_records_without_keyboard_input_and_stops_by_voice(self) -> None:
+    @pytest.mark.parametrize(
+        "stop_phrase", ["Stop!", "Goodbye Jarvis.", "Good bye.", "stop listening"]
+    )
+    def test_hands_free_records_without_keyboard_input_and_stops_by_voice(
+        self, stop_phrase: str
+    ) -> None:
         engine = MagicMock()
         engine.engine_id = "mock"
         config = JarvisConfig()
@@ -154,7 +159,7 @@ class TestChatCommand:
             patch("openjarvis.intelligence.register_builtin_models"),
             patch(
                 "openjarvis.cli.chat_cmd.record_voice",
-                side_effect=["hello", "goodbye Jarvis"],
+                side_effect=["hello", stop_phrase],
             ) as record,
             patch("openjarvis.cli.chat_cmd.speak") as speak,
             patch(
