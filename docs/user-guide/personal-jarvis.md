@@ -46,6 +46,24 @@ cp deploy/launchd/com.openjarvis.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.openjarvis.plist
 ```
 
+**On a MacBook**, the laptop sleeps when the lid closes and Jarvis goes
+offline with it. Keep it on power and run `sudo pmset -c sleep 0` (never
+sleep on the charger), or wrap the server in `caffeinate -s`. The launchd
+plist runs `/usr/local/bin/jarvis`; change that to the output of
+`which jarvis` if you installed somewhere else. launchd does not read your
+shell profile, so put API keys in `~/.openjarvis/credentials.toml` (loaded
+by `jarvis serve`), not only in `~/.zshrc`:
+
+```toml
+[jarvis]
+ANTHROPIC_API_KEY = "sk-ant-..."
+ELEVENLABS_API_KEY = "..."
+HONCHO_API_KEY = "..."
+TELEGRAM_BOT_TOKEN = "..."
+```
+
+Run `chmod 600 ~/.openjarvis/credentials.toml` afterwards.
+
 Keep the server on `127.0.0.1` and set `OPENJARVIS_API_KEY`. To reach it from
 your phone, use `jarvis tunnel` instead of exposing the port directly.
 
@@ -152,7 +170,8 @@ for example "every weekday at 8am, summarise my inbox". Other connectors
 **Messaging.** Export `TELEGRAM_BOT_TOKEN` (or `SLACK_BOT_TOKEN` +
 `SLACK_APP_TOKEN`) and set `[channel.telegram] allowed_chat_ids` so that only
 you can talk to the bot. For iMessage on a Mac, run
-`jarvis channels imessage-start`, or use the BlueBubbles bridge. See
+`jarvis channels imessage-start <your-phone-or-apple-id>` (the terminal needs
+Full Disk Access to read Messages), or use the BlueBubbles bridge. See
 [Channels](channels.md).
 
 **Voice.** Export `ELEVENLABS_API_KEY`. The preset uses ElevenLabs'
