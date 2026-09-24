@@ -142,6 +142,34 @@ class TestChatCommand:
         assert result.exception is None
         assert "Goodbye!" in result.output
 
+    def test_hands_free_records_without_keyboard_input_and_stops_by_voice(self) -> None:
+        engine = MagicMock()
+        engine.engine_id = "mock"
+        config = JarvisConfig()
+        config.intelligence.default_model = "test-model"
+
+        with (
+            patch("openjarvis.cli.chat_cmd.load_config", return_value=config),
+            patch("openjarvis.engine.get_engine", return_value=("mock", engine)),
+            patch("openjarvis.intelligence.register_builtin_models"),
+            patch(
+                "openjarvis.cli.chat_cmd.record_voice",
+                side_effect=["hello", "goodbye Jarvis"],
+            ) as record,
+            patch("openjarvis.cli.chat_cmd.speak") as speak,
+            patch(
+                "builtins.input", side_effect=AssertionError("keyboard input requested")
+            ),
+        ):
+            engine.generate.return_value = {"content": "Hello there"}
+            result = CliRunner().invoke(chat, ["--hands-free", "--model", "test-model"])
+
+        assert result.exit_code == 0, result.output
+        assert "Hands-free voice ON" in result.output
+        assert "Goodbye!" in result.output
+        assert record.call_count == 2
+        speak.assert_called_once()
+
 
 class TestReadInput:
     """Test the _read_input helper function."""

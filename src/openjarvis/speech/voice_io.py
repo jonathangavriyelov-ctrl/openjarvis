@@ -77,7 +77,8 @@ def record_until_silence(
                 if silence_count >= silence_chunks:
                     break
 
-    return _frames_to_wav(frames, sample_rate)
+    # Do not send ambient silence to a speech model: it can hallucinate words.
+    return _frames_to_wav(frames, sample_rate) if has_speech else b""
 
 
 def _frames_to_wav(frames: list[bytes], sample_rate: int) -> bytes:

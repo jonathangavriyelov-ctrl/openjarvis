@@ -57,6 +57,7 @@ Platform-specific notes (WSL2 setup, native-Windows scheduled-task service, desk
 ```bash
 jarvis                          # start chatting (default: chat-simple)
 jarvis init --preset <name> --force  # replace config with a starter preset
+jarvis chat --hands-free         # keep listening after each spoken reply; Ctrl-C exits
 ```
 
 > Prefix `jarvis ...` with `uv run`, or `source .venv/bin/activate` first.

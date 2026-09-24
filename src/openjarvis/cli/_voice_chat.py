@@ -131,6 +131,8 @@ def read_voice_input(console: Any, session: VoiceSession) -> Optional[str] | obj
 def record_voice(
     console: Any,
     session: VoiceSession | None = None,
+    *,
+    continuous: bool = False,
 ) -> Optional[str] | object:
     """Record from mic, transcribe, and return text or a loop sentinel."""
     from openjarvis.speech.voice_io import record_until_silence
@@ -148,7 +150,10 @@ def record_voice(
 
     console.print("[dim cyan]Listening… (speak now, stops on silence)[/dim cyan]")
     try:
-        audio_bytes = record_until_silence()
+        audio_bytes = (
+            record_until_silence(startup_silence_seconds=30, max_seconds=30)
+            if continuous else record_until_silence()
+        )
     except KeyboardInterrupt:
         return VOICE_EXIT
     except Exception as exc:
@@ -158,6 +163,9 @@ def record_voice(
         # Ctrl-C maps to the chat loop's graceful-exit sentinel above.
         console.print(f"[red]Mic error: {_terminal_safe_text(exc)}[/red]")
         return VOICE_EXIT
+
+    if not audio_bytes:
+        return None
 
     console.print("[dim]Transcribing…[/dim]")
     try:
