@@ -182,6 +182,7 @@ nav:
       - Pearl Mining: user-guide/mining.md
       - Pearl Mining on Apple Silicon: user-guide/mining-apple-silicon.md
       - Python SDK: user-guide/python-sdk.md
+      - Build Your Own Jarvis: user-guide/personal-jarvis.md
       - Morning Digest: user-guide/morning-digest.md
       - Deep Research: user-guide/deep-research.md
       - Code Assistant: user-guide/code-assistant.md

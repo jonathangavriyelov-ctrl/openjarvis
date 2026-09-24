@@ -1434,3 +1434,33 @@ class TestWebSearchDestination:
                             f"tavily={tavily} youcom={youcom} serply={serply} "
                             f"engine={engine}"
                         )
+
+
+def test_honcho_memory_backend_is_reported(tmp_path, monkeypatch):
+    config = _low_noise_config()
+    config.tools.storage.enabled = True
+    config.tools.storage.backend = "honcho"
+    monkeypatch.setenv("HONCHO_API_KEY", "secret-honcho-key")
+
+    report = build_data_boundary_report(config, tmp_path)
+    payload = report.to_dict(show_paths=True)
+
+    findings = {finding.id: finding for finding in report.findings}
+    assert findings["memory-honcho-backend"].status == "warn"
+    assert findings["env-credential-honcho_api_key"].status == "warn"
+    assert "secret-honcho-key" not in str(payload)
+
+
+def test_elevenlabs_digest_tts_is_reported(tmp_path, monkeypatch):
+    config = _low_noise_config()
+    config.digest.enabled = True
+    config.digest.tts_backend = "elevenlabs"
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "secret-eleven-key")
+
+    report = build_data_boundary_report(config, tmp_path)
+    payload = report.to_dict(show_paths=True)
+
+    findings = {finding.id: finding for finding in report.findings}
+    assert findings["cloud-tts-backend-configured"].status == "warn"
+    assert findings["env-credential-elevenlabs_api_key"].status == "warn"
+    assert "secret-eleven-key" not in str(payload)

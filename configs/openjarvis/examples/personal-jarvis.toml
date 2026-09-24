@@ -1,0 +1,114 @@
+# Personal Jarvis — an always-on agent that knows you, uses your tools,
+# remembers across sessions, answers on your messaging apps, and talks back.
+# Copy to ~/.openjarvis/config.toml (or: jarvis init --preset personal-jarvis --force)
+#
+# The 9-step walkthrough lives in docs/user-guide/personal-jarvis.md. In short:
+#   1. Home:      run this on an always-on box (Mac mini, old laptop, cloud VM)
+#                 and install the service (deploy/systemd or deploy/launchd).
+#   2. Harness:   OpenJarvis itself (orchestrator agent + tools + skills).
+#   3. Brain:     [engine]/[intelligence] below: Claude, GPT/Codex or Gemini
+#                 via the cloud engine. Swap any time with --model.
+#   4. Identity:  edit ~/.openjarvis/SOUL.md (how it behaves) and USER.md
+#                 (who you are: work, goals, preferences).
+#   5. Memory:    [memory] below. backend = "honcho" mirrors learned facts
+#                 to Honcho; "local" keeps everything on this machine.
+#   6. Skills:    [[skills.sources]] below imports Hermes Agent skills.
+#   7. Tools:     jarvis connect gdrive   (Gmail + Calendar + Drive + Tasks)
+#   8. Channels:  [channel] below + ELEVENLABS_API_KEY for the voice.
+#   9. Interface: jarvis serve, then point your UI at POST /v1/speech/synthesize.
+#
+# Secrets belong in the environment (or ~/.openjarvis/credentials.toml),
+# never in this file:
+#   ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY    the brain
+#   HONCHO_API_KEY (+ HONCHO_URL if self-hosted)           long-term memory
+#   ELEVENLABS_API_KEY                                     the voice
+#   TELEGRAM_BOT_TOKEN, SLACK_BOT_TOKEN, SLACK_APP_TOKEN   channels
+#
+# Privacy: this preset sends prompts, memory facts, and spoken replies to
+# cloud providers. Run `jarvis scan --data-boundaries` to review each one.
+
+[engine]
+default = "cloud"
+
+[intelligence]
+default_model = "claude-sonnet-4-6"   # Claude
+# default_model = "gpt-5"             # OpenAI (Codex family)
+# default_model = "gemini-3-pro"      # Gemini
+temperature = 0.4
+
+[agent]
+default_agent = "orchestrator"      # picks tools automatically, multi-turn
+max_turns = 15
+context_from_memory = true
+
+[tools]
+enabled = [
+    "think",
+    "calculator",
+    "web_search",
+    "get_weather",
+    "digest_collect",        # email, messages and news via connected accounts
+    "calendar_upcoming",
+    "calendar_search",
+    "knowledge_search",      # your indexed documents (jarvis memory index ~/Documents)
+    "memory_store",
+    "memory_search",
+    "user_profile_manage",   # lets Jarvis update USER.md as it learns about you
+    "skill_manage",
+    "browser_navigate",
+    "browser_extract",
+    "browser_click",
+    "browser_type",
+    "channel_send",
+    "schedule_task",
+    "list_scheduled_tasks",
+    "text_to_speech",
+]
+
+[tools.browser]
+headless = true
+
+# Long-term memory: facts about you are extracted from every conversation in
+# the background. Review them any time with `jarvis memory list`.
+[memory]
+enabled = true
+backend = "honcho"                  # or "local" to keep facts on this machine
+max_facts = 2000
+
+[memory_files]
+nudge_interval = 10                 # remind the agent to update USER.md/MEMORY.md
+
+[skills]
+enabled = true
+auto_sync = true
+
+[[skills.sources]]
+source = "hermes"
+filter = { category = ["productivity", "research", "email"] }
+auto_update = true
+
+[channel]
+enabled = true
+default_channel = "telegram"
+default_agent = "orchestrator"
+
+[channel.telegram]
+allowed_chat_ids = ""               # set to your chat id so only you can talk to it
+
+# iMessage (macOS): run `jarvis channels imessage-start`, or bridge through
+# BlueBubbles:
+# [channel.bluebubbles]
+# url = "http://localhost:1234"
+
+[speech]
+backend = "auto"                    # speech-to-text: local whisper first
+tts_backend = "elevenlabs"
+voice_id = "JBFqnCBsd6RMkjVDRZzb"   # "George": warm British. Any ElevenLabs voice id works.
+voice_speed = 1.0
+
+[scheduler]
+enabled = true
+
+[server]
+host = "127.0.0.1"                  # use `jarvis tunnel` rather than 0.0.0.0
+port = 8000

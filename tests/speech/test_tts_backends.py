@@ -426,3 +426,72 @@ def test_openai_tts_synthesize():
 
     assert result.audio == b"fake-openai-audio"
     assert result.voice_id == "nova"
+
+
+# ---------------------------------------------------------------------------
+# ElevenLabs backend tests
+# ---------------------------------------------------------------------------
+
+
+def test_elevenlabs_registered():
+    from openjarvis.speech.elevenlabs_tts import ElevenLabsTTSBackend
+
+    TTSRegistry.register_value("elevenlabs", ElevenLabsTTSBackend)
+    assert TTSRegistry.contains("elevenlabs")
+
+
+def test_elevenlabs_synthesize_defaults_to_british_voice(monkeypatch):
+    from openjarvis.speech import elevenlabs_tts
+
+    monkeypatch.delenv("ELEVENLABS_MODEL", raising=False)
+    backend = elevenlabs_tts.ElevenLabsTTSBackend(api_key="fake-key")
+
+    with patch(
+        "openjarvis.speech.elevenlabs_tts._elevenlabs_synthesize",
+        return_value=b"fake-audio-mp3-bytes",
+    ) as synth:
+        result = backend.synthesize("Good evening")
+
+    assert result.audio == b"fake-audio-mp3-bytes"
+    assert result.format == "mp3"
+    assert result.voice_id == elevenlabs_tts.DEFAULT_VOICE_ID
+    assert synth.call_args.kwargs["voice_id"] == elevenlabs_tts.DEFAULT_VOICE_ID
+    assert synth.call_args.kwargs["model"] == elevenlabs_tts.DEFAULT_MODEL
+
+
+def test_elevenlabs_request_shape():
+    from openjarvis.speech import elevenlabs_tts
+
+    class _Resp:
+        content = b"audio"
+
+        def raise_for_status(self):
+            return None
+
+    with patch.object(elevenlabs_tts.httpx, "post", return_value=_Resp()) as post:
+        audio = elevenlabs_tts._elevenlabs_synthesize(
+            "k", "Hi", voice_id="v1", model="m", output_format="pcm", speed=1.1
+        )
+
+    assert audio == b"audio"
+    url = post.call_args.args[0]
+    kwargs = post.call_args.kwargs
+    assert url.endswith("/v1/text-to-speech/v1")
+    assert kwargs["headers"]["xi-api-key"] == "k"
+    assert kwargs["params"] == {"output_format": "pcm_24000"}
+    assert kwargs["json"] == {
+        "text": "Hi",
+        "model_id": "m",
+        "voice_settings": {"speed": 1.1},
+    }
+
+
+def test_elevenlabs_requires_api_key(monkeypatch):
+    from openjarvis.speech.elevenlabs_tts import ElevenLabsTTSBackend
+
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    backend = ElevenLabsTTSBackend()
+    assert backend.health() is False
+    assert backend.available_voices() == []
+    with pytest.raises(RuntimeError, match="ELEVENLABS_API_KEY"):
+        backend.synthesize("Hello")

@@ -137,3 +137,84 @@ def test_health_no_backend():
     assert response.status_code == 200
     data = response.json()
     assert data["available"] is False
+
+
+# ---------------------------------------------------------------------------
+# /v1/speech/synthesize
+# ---------------------------------------------------------------------------
+
+
+def _tts_app(tts_backend=None, speech_cfg=None):
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+
+    from openjarvis.server.api_routes import speech_router
+
+    app = FastAPI()
+    app.state.config = SimpleNamespace(speech=speech_cfg)
+    if tts_backend is not None:
+        app.state.tts_backend = tts_backend
+    app.include_router(speech_router)
+    return TestClient(app)
+
+
+def _mock_tts(backend_id="elevenlabs"):
+    from openjarvis.speech.tts import TTSResult
+
+    backend = MagicMock()
+    backend.backend_id = backend_id
+    backend.synthesize.return_value = TTSResult(
+        audio=b"mp3-bytes", format="mp3", voice_id="george"
+    )
+    return backend
+
+
+def test_synthesize_uses_configured_voice():
+    from types import SimpleNamespace
+
+    backend = _mock_tts()
+    cfg = SimpleNamespace(tts_backend="elevenlabs", voice_id="george", voice_speed=1.0)
+    client = _tts_app(backend, cfg)
+
+    resp = client.post("/v1/speech/synthesize", json={"text": "At your service."})
+
+    assert resp.status_code == 200
+    assert resp.content == b"mp3-bytes"
+    assert resp.headers["content-type"] == "audio/mpeg"
+    assert resp.headers["x-tts-backend"] == "elevenlabs"
+    backend.synthesize.assert_called_once_with(
+        "At your service.", voice_id="george", speed=1.0
+    )
+
+
+def test_synthesize_rejects_empty_text():
+    client = _tts_app(_mock_tts())
+    resp = client.post("/v1/speech/synthesize", json={"text": "   "})
+    assert resp.status_code == 400
+
+
+def test_synthesize_unknown_backend_is_501():
+    client = _tts_app(_mock_tts())
+    resp = client.post(
+        "/v1/speech/synthesize", json={"text": "Hi", "backend": "does-not-exist"}
+    )
+    assert resp.status_code == 501
+
+
+def test_synthesize_other_backend_does_not_get_configured_voice():
+    from types import SimpleNamespace
+
+    from openjarvis.core.registry import TTSRegistry
+
+    other = _mock_tts("cartesia")
+    TTSRegistry.register_value("cartesia", MagicMock(return_value=other))
+    cfg = SimpleNamespace(tts_backend="elevenlabs", voice_id="george", voice_speed=1.0)
+    client = _tts_app(_mock_tts(), cfg)
+
+    resp = client.post(
+        "/v1/speech/synthesize", json={"text": "Hi", "backend": "cartesia"}
+    )
+
+    assert resp.status_code == 200
+    other.synthesize.assert_called_once_with("Hi", speed=1.0)

@@ -396,6 +396,13 @@ def _ensure_fact_store_backends_registered() -> None:
     """Restore built-in fact-store registrations if a test cleared registries."""
     if not FactStoreRegistry.contains("local"):
         FactStoreRegistry.register_value("local", LocalFactStore)
+    if not FactStoreRegistry.contains("honcho"):
+        # Imported lazily: honcho_store subclasses LocalFactStore. The Honcho
+        # SDK itself is only imported when the store first talks to Honcho.
+        from openjarvis.memory.honcho_store import HonchoFactStore
+
+        if not FactStoreRegistry.contains("honcho"):
+            FactStoreRegistry.register_value("honcho", HonchoFactStore)
 
 
 def create_fact_store(
@@ -406,9 +413,10 @@ def create_fact_store(
 ) -> FactStore:
     """Construct a fact store for the configured *backend*.
 
-    Only the ``"local"`` (on-disk JSONL) backend is supported today; the
-    registry-backed constructor exists so additional backends can be added
-    without changing the service or CLI wiring.
+    Built-in backends are ``"local"`` (on-disk JSONL) and ``"honcho"`` (local
+    JSONL mirrored to the Honcho memory service); the registry-backed
+    constructor lets additional backends be added without changing the service
+    or CLI wiring.
     """
     _ensure_fact_store_backends_registered()
     key = (backend or "local").strip().lower()

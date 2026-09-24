@@ -7,7 +7,7 @@ from typing import Any, Optional
 from rich.markup import escape
 
 VOICE_EXIT = object()
-_TTS_BACKEND_ORDER = ("kokoro", "openai_tts", "cartesia")
+_TTS_BACKEND_ORDER = ("kokoro", "openai_tts", "cartesia", "elevenlabs")
 # Voice IDs are backend-specific and NOT portable. ``speech.voice_id`` applies
 # only to ``speech.tts_backend``; if synthesis falls back to another backend we
 # use that backend's own default rather than passing an unrecognized ID through.
@@ -15,6 +15,7 @@ _BACKEND_DEFAULT_VOICE = {
     "kokoro": "bm_george",  # British male
     "openai_tts": "onyx",  # deepest OpenAI preset
     "cartesia": "",  # no safe static default; let Cartesia choose
+    "elevenlabs": "",  # backend defaults to its British "George" voice
 }
 
 

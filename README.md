@@ -68,6 +68,7 @@ jarvis init --preset <name> --force  # replace config with a starter preset
 | `code-assistant` | Agent with code execution, file I/O, and shell access |
 | `scheduled-monitor` | Stateful agent on a schedule with memory |
 | `chat-simple` | Lightweight conversation, no tools |
+| `personal-jarvis` | Always-on assistant: cloud brain, Honcho memory, Hermes skills, Telegram, ElevenLabs voice — see the [9-step guide](docs/user-guide/personal-jarvis.md) |
 
 Example:
 

@@ -43,3 +43,17 @@ def test_preset_loads(preset_path: Path) -> None:
     # slots `jarvis init` expects to be populated for a working first run.
     assert cfg.engine.default, f"{preset_path.stem}: engine.default is empty"
     assert cfg.agent.default_agent, f"{preset_path.stem}: agent.default_agent is empty"
+
+
+def test_personal_jarvis_preset_wires_memory_voice_and_channels() -> None:
+    cfg = load_config(path=PRESETS_DIR / "personal-jarvis.toml")
+
+    assert cfg.engine.default == "cloud"
+    assert cfg.agent.default_agent == "orchestrator"
+    # [memory] maps onto tools.storage.
+    assert cfg.tools.storage.enabled is True
+    assert cfg.tools.storage.backend == "honcho"
+    assert cfg.speech.tts_backend == "elevenlabs"
+    assert cfg.channel.enabled is True
+    assert cfg.channel.default_channel == "telegram"
+    assert [s.source for s in cfg.skills.sources] == ["hermes"]

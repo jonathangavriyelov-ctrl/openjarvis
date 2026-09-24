@@ -1018,6 +1018,81 @@ async def transcribe_speech(request: Request):
     }
 
 
+class SynthesizeRequest(BaseModel):
+    text: str
+    backend: str = ""
+    voice_id: str = ""
+    speed: Optional[float] = None
+
+
+_TTS_MEDIA_TYPES = {"mp3": "audio/mpeg", "wav": "audio/wav", "pcm": "audio/L16"}
+
+
+@speech_router.post("/synthesize")
+async def synthesize_speech(req: SynthesizeRequest, request: Request):
+    """Speak *text* with the configured TTS voice and return the audio bytes.
+
+    This is the hook a custom UI uses to give the agent a voice: send the
+    assistant's reply here and play the response. The backend and voice
+    default to ``[speech] tts_backend`` / ``voice_id``; the configured voice
+    only applies when the configured backend is used, since voice IDs are not
+    portable between backends.
+    """
+    from fastapi.responses import Response
+
+    import openjarvis.speech  # noqa: F401 — registers TTS backends
+    from openjarvis.core.registry import TTSRegistry
+
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="'text' must not be empty")
+
+    speech_cfg = getattr(getattr(request.app.state, "config", None), "speech", None)
+    configured_backend = getattr(speech_cfg, "tts_backend", "") or "kokoro"
+    backend_key = {"openai": "openai_tts"}.get(req.backend, req.backend)
+    backend_key = backend_key or configured_backend
+    voice_id = req.voice_id
+    if not voice_id and backend_key == configured_backend:
+        voice_id = getattr(speech_cfg, "voice_id", "") or ""
+    speed = req.speed
+    if speed is None and speech_cfg is not None:
+        speed = float(getattr(speech_cfg, "voice_speed", 1.0))
+
+    backend = getattr(request.app.state, "tts_backend", None)
+    if backend is None or getattr(backend, "backend_id", "") != backend_key:
+        if not TTSRegistry.contains(backend_key):
+            raise HTTPException(
+                status_code=501, detail=f"TTS backend '{backend_key}' not available"
+            )
+        backend = TTSRegistry.get(backend_key)()
+        if not backend.health():
+            raise HTTPException(
+                status_code=501,
+                detail=f"TTS backend '{backend_key}' is not configured",
+            )
+        request.app.state.tts_backend = backend
+
+    kwargs: Dict[str, Any] = {}
+    if voice_id:
+        kwargs["voice_id"] = voice_id
+    if speed is not None:
+        kwargs["speed"] = speed
+    try:
+        result = await asyncio.to_thread(backend.synthesize, text, **kwargs)
+    except Exception as exc:
+        logger.exception("Speech synthesis failed")
+        raise HTTPException(
+            status_code=500, detail=f"Speech synthesis failed: {exc}"
+        ) from exc
+
+    fmt = result.format or "mp3"
+    return Response(
+        content=result.audio,
+        media_type=_TTS_MEDIA_TYPES.get(fmt, "application/octet-stream"),
+        headers={"X-TTS-Backend": backend_key, "X-TTS-Voice": result.voice_id},
+    )
+
+
 @speech_router.get("/health")
 async def speech_health(request: Request):
     """Check if a speech backend is available."""

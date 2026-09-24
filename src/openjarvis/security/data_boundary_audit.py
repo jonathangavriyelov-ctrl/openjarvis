@@ -58,8 +58,13 @@ API_KEY_ENV_VARS = {
         {"cartesia", "text_to_speech"},
     ),
     "DEEPSEEK_API_KEY": ("DeepSeek cloud inference", {"deepseek"}),
+    "ELEVENLABS_API_KEY": (
+        "ElevenLabs cloud text-to-speech",
+        {"elevenlabs", "text_to_speech"},
+    ),
     "GEMINI_API_KEY": ("Google/Gemini cloud inference", {"google", "gemini"}),
     "GOOGLE_API_KEY": ("Google/Gemini cloud inference", {"google", "gemini"}),
+    "HONCHO_API_KEY": ("Honcho cloud memory", {"honcho"}),
     "MINIMAX_API_KEY": ("MiniMax cloud inference", {"minimax"}),
     "OPENAI_API_KEY": ("OpenAI cloud inference", {"openai", "gpt"}),
     "OPENROUTER_API_KEY": ("OpenRouter cloud inference", {"openrouter"}),
@@ -219,7 +224,7 @@ GENERIC_NETWORK_TOOLS = {"http_request"}
 WEATHER_TOOLS = {"get_weather"}
 CHANNEL_OUTBOUND_TOOLS = {"channel_send"}
 CLOUD_MEDIA_TOOLS = {"audio_transcribe", "image_generate", "text_to_speech"}
-CLOUD_TTS_BACKENDS = {"cartesia", "openai", "openai_tts"}
+CLOUD_TTS_BACKENDS = {"cartesia", "elevenlabs", "openai", "openai_tts"}
 # Local knowledge chunks scanned by an inference engine (Deep Research path).
 KNOWLEDGE_ENGINE_TOOLS = {"scan_chunks"}
 # External egress surfaces (web, browser, HTTP, channels, media, knowledge LM).
@@ -623,6 +628,21 @@ def _audit_memory_service(config: Any, builder: _FindingBuilder) -> None:
             "background memory service on sensitive workloads."
         ),
     )
+    backend = str(_get(config, "tools.storage.backend", "") or "").lower()
+    if backend == "honcho":
+        builder.add(
+            finding_id="memory-honcho-backend",
+            status="warn",
+            title="Automatic memory facts are mirrored to Honcho",
+            potential_data_path=(
+                "conversation content -> extracted facts -> Honcho memory service"
+            ),
+            evidence='memory.backend = "honcho"',
+            recommendation=(
+                "Point HONCHO_URL at a self-hosted Honcho, or use the local "
+                "memory backend, when facts about you must stay on this machine."
+            ),
+        )
 
 
 def _audit_deep_research_settings(config: Any, builder: _FindingBuilder) -> None:
@@ -1237,8 +1257,11 @@ def _audit_environment_credentials(
                 str(_get(config, "engine.default", "")).lower(),
                 str(_get(config, "intelligence.default_model", "")).lower(),
                 str(_get(config, "speech.backend", "")).lower(),
+                str(_get(config, "speech.tts_backend", "")).lower(),
             }
         )
+        if bool(_get(config, "tools.storage.enabled", False)):
+            active_values.add(str(_get(config, "tools.storage.backend", "")).lower())
         if bool(_get(config, "digest.enabled", False)):
             active_values.add(str(_get(config, "digest.tts_backend", "")).lower())
 
