@@ -73,6 +73,11 @@ If you prefer to run each step yourself:
 
 Then open [http://localhost:5173](http://localhost:5173).
 
+The sidebar includes **Ecosystem**, a visual map of the current assistant, and
+**Memory**, a place to search the existing local memory store. Project spaces
+for Quick Funders and Self-Audit are labeled as planned until their own
+databases and access permissions are connected.
+
 ---
 
 ## Desktop App
