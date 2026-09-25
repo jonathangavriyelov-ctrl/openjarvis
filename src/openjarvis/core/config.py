@@ -1758,6 +1758,23 @@ class DigestConfig:
     )
 
 
+@dataclass(slots=True)
+class PersonalConfig:
+    """Personal AI OS — chief of staff, specialists, and goals.
+
+    ``hermes_model`` is a Nous Research Hermes model id served by the
+    configured engine (Ollama or any OpenAI-compatible server). The
+    Executive Assistant uses it when the engine lists that model, and
+    otherwise falls back to ``fallback_model`` or the server default.
+    """
+
+    enabled: bool = True
+    db_path: str = ""
+    hermes_model: str = "hermes3"
+    fallback_model: str = ""
+    schedule_checkins: bool = True
+
+
 @dataclass
 class JarvisConfig:
     """Top-level configuration for OpenJarvis."""
@@ -1790,6 +1807,7 @@ class JarvisConfig:
     system_prompt: SystemPromptConfig = field(default_factory=SystemPromptConfig)
     compression: CompressionConfig = field(default_factory=CompressionConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)
+    personal: PersonalConfig = field(default_factory=PersonalConfig)
     digest: DigestConfig = field(default_factory=DigestConfig)
     proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
     mining: Optional["MiningConfig"] = None
@@ -2107,6 +2125,7 @@ def load_config(path: Optional[Path] = None) -> JarvisConfig:
             "system_prompt",
             "compression",
             "skills",
+            "personal",
         )
         for section_name in top_sections:
             if section_name in data:

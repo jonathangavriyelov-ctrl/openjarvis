@@ -10,6 +10,12 @@ import { GetStartedPage } from './pages/GetStartedPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { DataSourcesPage } from './pages/DataSourcesPage';
 import { LogsPage } from './pages/LogsPage';
+import { WorldPage } from './pages/personal/WorldPage';
+import { ChiefPage } from './pages/personal/ChiefPage';
+import { AgentPage } from './pages/personal/AgentPage';
+import { GoalsPage } from './pages/personal/GoalsPage';
+import { SecondBrainPage } from './pages/personal/SecondBrainPage';
+import { DeliverablesPage } from './pages/personal/DeliverablesPage';
 import { CommandPalette } from './components/CommandPalette';
 import { SetupScreen } from './components/SetupScreen';
 import { Toaster } from './components/ui/sonner';
@@ -188,6 +194,12 @@ export default function App() {
           <Route index element={<ChatPage />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="ecosystem" element={<EcosystemPage />} />
+          <Route path="os/world" element={<WorldPage />} />
+          <Route path="os/chief" element={<ChiefPage />} />
+          <Route path="os/agents/:agentId" element={<AgentPage />} />
+          <Route path="os/goals" element={<GoalsPage />} />
+          <Route path="os/brain" element={<SecondBrainPage />} />
+          <Route path="os/library" element={<DeliverablesPage />} />
           <Route path="memory" element={<MemoryHubPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="get-started" element={<GetStartedPage />} />
