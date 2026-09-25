@@ -94,12 +94,26 @@ def _office_from_app(request: Request) -> PersonalOffice:
     image_model = ""
     video_model = ""
     superclaude_dir = ""
+    omniroute_enabled = False
+    omniroute_base_url = ""
+    omniroute_api_key = ""
+    omniroute_model = "auto"
+    omniroute_models: dict[str, str] = {}
     if personal is not None:
         schedule_checkins = bool(getattr(personal, "schedule_checkins", True))
         higgsfield_key = getattr(personal, "higgsfield_key", "") or ""
         image_model = getattr(personal, "higgsfield_image_model", "") or ""
         video_model = getattr(personal, "higgsfield_video_model", "") or ""
         superclaude_dir = getattr(personal, "superclaude_dir", "") or ""
+        omniroute_enabled = bool(getattr(personal, "omniroute_enabled", False))
+        omniroute_base_url = getattr(personal, "omniroute_base_url", "") or ""
+        omniroute_api_key = getattr(personal, "omniroute_api_key", "") or ""
+        omniroute_model = getattr(personal, "omniroute_model", "") or "auto"
+        raw_models = getattr(personal, "omniroute_models", None) or {}
+        if isinstance(raw_models, dict):
+            omniroute_models = {
+                str(key): str(value) for key, value in raw_models.items()
+            }
     office = PersonalOffice(
         db_path,
         engine=getattr(request.app.state, "engine", None),
@@ -114,6 +128,11 @@ def _office_from_app(request: Request) -> PersonalOffice:
         higgsfield_image_model=image_model,
         higgsfield_video_model=video_model,
         superclaude_dir=superclaude_dir,
+        omniroute_enabled=omniroute_enabled,
+        omniroute_base_url=omniroute_base_url,
+        omniroute_api_key=omniroute_api_key,
+        omniroute_model=omniroute_model,
+        omniroute_models=omniroute_models,
     )
     request.app.state.personal_office = office
     return office

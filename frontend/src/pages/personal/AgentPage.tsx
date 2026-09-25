@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { fetchAgent, statusLabel, type PersonalAgent } from '../../lib/personal-api';
+import { fetchAgent, routeLabel, statusLabel, type PersonalAgent } from '../../lib/personal-api';
 import { OsError, OsShell } from './Shell';
 import './personal.css';
 
@@ -55,15 +55,15 @@ export function AgentPage() {
                 <li key={skill.name}><strong>{skill.name}</strong> — {skill.description}</li>
               ))}
             </ul>
-            {agent.prefers_hermes && (
-              <div style={{ marginTop: 16 }}>
-                <h2>Hermes</h2>
-                <p className="muted">
-                  This assistant prefers a Nous Research Hermes model
-                  {agent.model?.model_id ? ` (${agent.model.model_id})` : ''}. {agent.model?.detail}
-                </p>
-              </div>
-            )}
+            <div style={{ marginTop: 16 }}>
+              <h2>Route</h2>
+              <p className="muted">
+                {routeLabel(agent.model)}. {agent.model?.detail}
+                {agent.prefers_hermes
+                  ? ' This assistant prefers a Nous Research Hermes model when that id is available.'
+                  : ''}
+              </p>
+            </div>
           </article>
           <article className="os-card">
             <h2>Recent work</h2>

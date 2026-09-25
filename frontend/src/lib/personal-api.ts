@@ -5,7 +5,17 @@ export type Pace = 'on_track' | 'at_risk' | 'behind' | 'complete';
 
 export interface ModelChoice {
   model_id: string;
-  source: 'hermes' | 'fallback' | 'offline' | string;
+  source: 'hermes' | 'fallback' | 'offline' | 'omniroute' | string;
+  detail: string;
+  route?: 'engine' | 'omniroute' | 'offline' | string;
+}
+
+export interface OmniRouteStatus {
+  configured: boolean;
+  reachable: boolean;
+  base_url: string;
+  default_model?: string;
+  models?: string[];
   detail: string;
 }
 
@@ -163,6 +173,7 @@ export interface WorldSnapshot {
   hermes: ModelChoice;
   eli5?: boolean;
   higgsfield?: DeskSettings['higgsfield'];
+  omniroute?: OmniRouteStatus;
   commands?: DeskCommand[];
 }
 
@@ -280,6 +291,14 @@ export const askBrain = (question: string) =>
     method: 'POST',
     body: JSON.stringify({ question }),
   });
+
+export function routeLabel(model: ModelChoice | null | undefined): string {
+  if (!model || model.source === 'offline' || !model.model_id) return 'Local notes';
+  const name = model.model_id;
+  if (model.route === 'omniroute' || model.source === 'omniroute') return `OmniRoute · ${name}`;
+  if (model.source === 'hermes') return `Hermes · ${name}`;
+  return `Engine · ${name}`;
+}
 
 export function statusLabel(status: string, eli5 = false): string {
   if (status === 'working' || status === 'running') return eli5 ? 'Busy' : 'Working';

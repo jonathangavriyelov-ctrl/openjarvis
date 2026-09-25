@@ -20,6 +20,7 @@ from openjarvis.personal.hermes import (
 )
 from openjarvis.personal.higgsfield import HiggsfieldClient, resolve_credentials
 from openjarvis.personal.memory_bridge import MemoryBridge
+from openjarvis.personal.omniroute import OmniRouteClient, resolve_omniroute
 from openjarvis.personal.planner import plan_from_model_text, plan_request
 from openjarvis.personal.specialists import (
     ProduceContext,
@@ -118,6 +119,12 @@ class PersonalOffice:
         higgsfield_video_model: str = "",
         superclaude_dir: str = "",
         higgsfield: HiggsfieldClient | None = None,
+        omniroute_enabled: bool = False,
+        omniroute_base_url: str = "",
+        omniroute_api_key: str = "",
+        omniroute_model: str = "auto",
+        omniroute_models: dict[str, str] | None = None,
+        omniroute: OmniRouteClient | None = None,
     ) -> None:
         self.store = PersonalStore(db_path)
         self.store.ensure_example_projects()
@@ -135,7 +142,23 @@ class PersonalOffice:
             image_model=higgsfield_image_model,
             video_model=higgsfield_video_model,
         )
+        if omniroute is not None:
+            self.omniroute = omniroute
+        else:
+            base, key, model = resolve_omniroute(
+                enabled=omniroute_enabled,
+                base_url=omniroute_base_url,
+                api_key=omniroute_api_key,
+                model=omniroute_model,
+            )
+            self.omniroute = OmniRouteClient(
+                base,
+                key,
+                default_model=model,
+                agent_models=omniroute_models,
+            )
         self._turn: dict[str, Any] = {"eli5": False, "command": None}
+        self._calls = threading.local()
         self._run_lock = threading.Lock()
         self._thread_lock = threading.Lock()
         self._threads: dict[str, threading.Thread] = {}
@@ -175,30 +198,66 @@ class PersonalOffice:
             self.hermes_model, fallback, available, engine_ok
         )
         configured = resolve_configured_model(fallback, available, engine_ok)
+        agents = self._agent_choices(executive, configured)
         return {
-            "executive_assistant": executive.to_dict(),
-            "configured": configured.to_dict(),
+            "executive_assistant": agents["executive_assistant"].to_dict(),
+            "configured": agents.get("marketing_content", configured).to_dict(),
+            "agents": {key: choice.to_dict() for key, choice in agents.items()},
             "hermes_model": self.hermes_model,
             "available": available,
+            "omniroute": self.omniroute.public_status(),
         }
 
     def _choice_for(self, specialist_id: str, choices: dict[str, Any] | None = None):
         from openjarvis.personal.hermes import ModelChoice
 
         snapshot = choices or self.model_choices()
-        key = (
-            "executive_assistant"
-            if specialist_id == "executive_assistant"
-            else "configured"
-        )
-        raw = snapshot[key]
+        agents = snapshot.get("agents") or {}
+        if specialist_id in agents:
+            raw = agents[specialist_id]
+        else:
+            key = (
+                "executive_assistant"
+                if specialist_id == "executive_assistant"
+                else "configured"
+            )
+            raw = snapshot[key]
         if isinstance(raw, ModelChoice):
             return raw
-        return ModelChoice(raw["model_id"], raw["source"], raw["detail"])
+        return ModelChoice(
+            raw["model_id"],
+            raw["source"],
+            raw["detail"],
+            route=raw.get("route") or "engine",
+        )
+
+    def _agent_choices(self, executive: Any, configured: Any) -> dict[str, Any]:
+        """One model choice per agent, OmniRoute first when it is reachable."""
+        status = self.omniroute.public_status()
+        choices: dict[str, Any] = {}
+        for spec in list_specialists():
+            engine_choice = executive if spec.prefers_hermes else configured
+            if status.get("reachable"):
+                choices[spec.id] = self.omniroute.choice_for(
+                    spec.id,
+                    hermes_model=self.hermes_model,
+                    prefers_hermes=spec.prefers_hermes,
+                )
+            else:
+                choices[spec.id] = engine_choice
+        return choices
+
+    def _engine_choice(self, specialist_id: str) -> Any:
+        available, engine_ok = self._probe_engine()
+        fallback = self._fallback_id()
+        if specialist_id == "executive_assistant":
+            return resolve_executive_model(
+                self.hermes_model, fallback, available, engine_ok
+            )
+        return resolve_configured_model(fallback, available, engine_ok)
 
     def _generate(self, choice: Any, specialist_id: str, user_text: str) -> str | None:
-        if choice.source == "offline" or not choice.model_id or self.engine is None:
-            return None
+        self._calls.used = choice
         spec = get_specialist(specialist_id)
         extra = prompt_addons(
             self._turn.get("command"),
@@ -208,6 +267,27 @@ class PersonalOffice:
             Message(role=Role.SYSTEM, content=render_system_prompt(spec, extra=extra)),
             Message(role=Role.USER, content=user_text),
         ]
+        if getattr(choice, "route", "") == "omniroute":
+            payload = [
+                {"role": message.role.value, "content": message.content or ""}
+                for message in messages
+            ]
+            answered = self.omniroute.complete(choice.model_id, payload)
+            if answered is not None:
+                text, actual = answered
+                from openjarvis.personal.hermes import ModelChoice
+
+                self._calls.used = ModelChoice(
+                    actual or choice.model_id,
+                    "omniroute",
+                    choice.detail,
+                    route="omniroute",
+                )
+                return text
+            choice = self._engine_choice(specialist_id)
+            self._calls.used = choice
+        if choice.source == "offline" or not choice.model_id or self.engine is None:
+            return None
         try:
             result = self.engine.generate(
                 messages,
@@ -427,9 +507,12 @@ class PersonalOffice:
             self.hermes_model, fallback, available, engine_ok
         )
         configured = resolve_configured_model(fallback, available, engine_ok)
+        agents = self._agent_choices(executive, configured)
+        planner_choice = agents.get("chief_of_staff", configured)
         choices = {
-            "executive_assistant": executive,
-            "configured": configured,
+            "executive_assistant": agents["executive_assistant"],
+            "configured": planner_choice,
+            "agents": agents,
         }
         command = find_command(request, self._loaded_commands())
         self._turn = {"eli5": self.eli5_enabled(), "command": command}
@@ -438,18 +521,18 @@ class PersonalOffice:
         if command is not None:
             planned = plan_request(request, command=command)
             planner_source = "superclaude"
-        elif configured.source != "offline":
+        elif planner_choice.source != "offline":
             worker_ids = ", ".join(
                 spec.id for spec in list_specialists(include_chief=False)
             )
             raw_plan = self._generate(
-                configured,
+                planner_choice,
                 "chief_of_staff",
                 _PLAN_INSTRUCTION.format(ids=worker_ids) + f"\n\nRequest:\n{request}",
             )
             planned = plan_from_model_text(raw_plan or "", request=request)
             if planned:
-                planner_source = configured.source
+                planner_source = planner_choice.source
         if not planned:
             planned = plan_request(request)
             planner_source = "offline"
@@ -594,8 +677,9 @@ class PersonalOffice:
         if hits:
             memory_block = "\n\nRelated memory:\n" + "\n".join(hits)
         model_text = self._generate(choice, spec.id, task["brief"] + memory_block)
-        source = choice.source if model_text else "offline"
-        model_id = choice.model_id if model_text else ""
+        used = getattr(self._calls, "used", None) or choice
+        source = used.source if model_text else "offline"
+        model_id = used.model_id if model_text else ""
         command = self._turn.get("command")
         produced = produce_for(
             spec,
@@ -673,10 +757,11 @@ class PersonalOffice:
             row = spec.to_dict()
             row["status"] = state.get("status") or "idle"
             row["current_work"] = state.get("current_work") or ""
-            if spec.prefers_hermes:
+            routed = choices.get("agents") or {}
+            if spec.id in routed:
+                row["model"] = routed[spec.id]
+            elif spec.prefers_hermes:
                 row["model"] = choices["executive_assistant"]
-            elif spec.id == "chief_of_staff":
-                row["model"] = choices["configured"]
             else:
                 row["model"] = choices["configured"]
             agents.append(row)
@@ -717,6 +802,7 @@ class PersonalOffice:
             "hermes": self.model_choices()["executive_assistant"],
             "eli5": self.eli5_enabled(),
             "higgsfield": self.higgsfield.public_status(),
+            "omniroute": self.omniroute.public_status(),
             "commands": [
                 item.to_dict() for item in list_commands(self._loaded_commands())
             ],
@@ -744,6 +830,7 @@ class PersonalOffice:
         return {
             "eli5": self.eli5_enabled(),
             "higgsfield": self.higgsfield.public_status(),
+            "omniroute": self.omniroute.public_status(),
             "commands": [
                 item.to_dict() for item in list_commands(self._loaded_commands())
             ],

@@ -4,6 +4,7 @@ import {
   createProject,
   deleteProject,
   fetchWorld,
+  routeLabel,
   statusLabel,
   updateProject,
   type ProjectPlot,
@@ -199,6 +200,7 @@ export function WorldPage() {
                 <span className={`status-dot is-${agent.status}`}>{statusLabel(agent.status, eli5)}</span>
               </span>
               <em>{agent.current_work || (eli5 ? 'Nothing right now' : agent.niche)}</em>
+              <small>{routeLabel(agent.model)}</small>
             </button>
           );
         })}
@@ -207,6 +209,11 @@ export function WorldPage() {
             ? 'Gardens are projects. Tall plants mean a goal is further along. A line means a helper is on that project.'
             : 'Plots are projects, stalks are goal progress, and the bright lines are helpers on that work.'}
           {world?.higgsfield?.configured ? ' Higgsfield is connected.' : ' Higgsfield pictures wait for a key.'}
+          {world?.omniroute?.reachable
+            ? ` Models go through OmniRoute (${world.omniroute.base_url}).`
+            : world?.omniroute?.configured
+              ? ` ${world.omniroute.detail}`
+              : ''}
         </p>
       </section>
 

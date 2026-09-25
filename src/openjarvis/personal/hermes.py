@@ -26,14 +26,19 @@ class ModelChoice:
     """Which model a specialist should call, and why."""
 
     model_id: str
-    source: str  # "hermes", "fallback", or "offline"
+    source: str  # "hermes", "fallback", "offline", or "omniroute"
     detail: str
+    route: str = "engine"  # "engine", "omniroute", or "offline"
 
     def to_dict(self) -> dict:
+        route = self.route
+        if self.source == "offline":
+            route = "offline"
         return {
             "model_id": self.model_id,
             "source": self.source,
             "detail": self.detail,
+            "route": route,
         }
 
 

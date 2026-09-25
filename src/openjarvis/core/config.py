@@ -1779,6 +1779,14 @@ class PersonalConfig:
     higgsfield_video_model: str = "bytedance/seedance-2.0/text-to-video"
     # Directory of SuperClaude ``/sc:*`` markdown, if installed.
     superclaude_dir: str = ""
+    # OmniRoute is an optional local OpenAI-compatible gateway.
+    # Leave the URL empty to keep the existing engine. Prefer
+    # OMNIROUTE_BASE_URL and OMNIROUTE_API_KEY over storing the key here.
+    omniroute_enabled: bool = False
+    omniroute_base_url: str = ""
+    omniroute_api_key: str = ""
+    omniroute_model: str = "auto"
+    omniroute_models: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
