@@ -16,6 +16,7 @@ personal_router = APIRouter(prefix="/v1/personal", tags=["personal"])
 
 class MissionRequest(BaseModel):
     request: str = Field(..., min_length=1)
+    project_id: Optional[str] = None
 
 
 class GoalRequest(BaseModel):
@@ -23,6 +24,7 @@ class GoalRequest(BaseModel):
     target: str = "Completed"
     deadline: Optional[str] = None
     progress: float = 0
+    project_id: Optional[str] = None
 
 
 class GoalUpdateRequest(BaseModel):
@@ -31,6 +33,23 @@ class GoalUpdateRequest(BaseModel):
     deadline: Optional[str] = None
     progress: Optional[float] = None
     notes: Optional[str] = None
+    project_id: Optional[str] = None
+
+
+class SettingsRequest(BaseModel):
+    eli5: Optional[bool] = None
+
+
+class ProjectRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+    summary: str = ""
+    accent: str = "#7dcea0"
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    summary: Optional[str] = None
+    accent: Optional[str] = None
 
 
 class MilestoneRequest(BaseModel):
@@ -71,8 +90,16 @@ def _office_from_app(request: Request) -> PersonalOffice:
     if not fallback and intelligence is not None:
         fallback = getattr(intelligence, "default_model", "") or ""
     schedule_checkins = True
+    higgsfield_key = ""
+    image_model = ""
+    video_model = ""
+    superclaude_dir = ""
     if personal is not None:
         schedule_checkins = bool(getattr(personal, "schedule_checkins", True))
+        higgsfield_key = getattr(personal, "higgsfield_key", "") or ""
+        image_model = getattr(personal, "higgsfield_image_model", "") or ""
+        video_model = getattr(personal, "higgsfield_video_model", "") or ""
+        superclaude_dir = getattr(personal, "superclaude_dir", "") or ""
     office = PersonalOffice(
         db_path,
         engine=getattr(request.app.state, "engine", None),
@@ -83,6 +110,10 @@ def _office_from_app(request: Request) -> PersonalOffice:
         fallback_model=fallback,
         default_model=default_model or fallback,
         schedule_checkins=schedule_checkins,
+        higgsfield_key=higgsfield_key,
+        higgsfield_image_model=image_model,
+        higgsfield_video_model=video_model,
+        superclaude_dir=superclaude_dir,
     )
     request.app.state.personal_office = office
     return office
@@ -128,7 +159,7 @@ def personal_submit_mission(body: MissionRequest, request: Request) -> dict[str,
     """Hand a request to the chief of staff. Poll the mission until it settles."""
     office = _office_from_app(request)
     try:
-        mission = office.submit_mission(body.request)
+        mission = office.submit_mission(body.request, project_id=body.project_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return mission
@@ -184,6 +215,7 @@ def personal_create_goal(body: GoalRequest, request: Request) -> dict[str, Any]:
         target=body.target,
         deadline=body.deadline,
         progress=progress,
+        project_id=body.project_id,
     )
 
 
@@ -240,3 +272,51 @@ def personal_capture_note(body: NoteRequest, request: Request) -> dict[str, Any]
 @personal_router.post("/notes/ask")
 def personal_ask(body: AskRequest, request: Request) -> dict[str, Any]:
     return _office_from_app(request).ask_memory(body.question)
+
+
+@personal_router.get("/settings")
+def personal_settings(request: Request) -> dict[str, Any]:
+    return _office_from_app(request).settings_view()
+
+
+@personal_router.put("/settings")
+def personal_update_settings(body: SettingsRequest, request: Request) -> dict[str, Any]:
+    office = _office_from_app(request)
+    if body.eli5 is not None:
+        office.set_eli5(body.eli5)
+    return office.settings_view()
+
+
+@personal_router.get("/projects")
+def personal_projects(request: Request) -> dict[str, Any]:
+    return {"projects": _office_from_app(request).project_board()}
+
+
+@personal_router.post("/projects")
+def personal_create_project(body: ProjectRequest, request: Request) -> dict[str, Any]:
+    office = _office_from_app(request)
+    return office.store.create_project(
+        body.name, summary=body.summary, accent=body.accent
+    )
+
+
+@personal_router.patch("/projects/{project_id}")
+def personal_update_project(
+    project_id: str,
+    body: ProjectUpdateRequest,
+    request: Request,
+) -> dict[str, Any]:
+    project = _office_from_app(request).store.update_project(
+        project_id, **body.model_dump(exclude_unset=True)
+    )
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+
+@personal_router.delete("/projects/{project_id}")
+def personal_delete_project(project_id: str, request: Request) -> dict[str, Any]:
+    deleted = _office_from_app(request).store.delete_project(project_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"deleted": True}

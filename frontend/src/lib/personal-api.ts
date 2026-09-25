@@ -39,6 +39,8 @@ export interface Mission {
   request: string;
   status: string;
   summary: string;
+  command?: string;
+  project_id?: string | null;
   plan: { specialist_id: string; title: string; brief: string }[];
   workflow: {
     name?: string;
@@ -64,6 +66,15 @@ export interface PersonalTask {
   a2a?: { id?: string; state?: string; input?: string; output?: string };
 }
 
+export interface MediaAsset {
+  id: string;
+  kind: string;
+  status: string;
+  url: string;
+  detail: string;
+  prompt: string;
+}
+
 export interface Deliverable {
   id: string;
   mission_id: string;
@@ -75,6 +86,7 @@ export interface Deliverable {
   model_id: string;
   model_source: string;
   created_at: string;
+  media?: MediaAsset[];
 }
 
 export interface Milestone {
@@ -94,8 +106,42 @@ export interface Goal {
   on_track: Pace;
   pace: string;
   milestones: Milestone[];
+  project_id?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ProjectPlot {
+  id: string;
+  name: string;
+  summary: string;
+  accent: string;
+  example: boolean;
+  goals: Goal[];
+  tasks: PersonalTask[];
+}
+
+export interface WorkLink {
+  from: string;
+  to: string;
+  status: string;
+  title: string;
+}
+
+export interface DeskCommand {
+  name: string;
+  title: string;
+  summary: string;
+  mode: string;
+  specialists: string[];
+  persona: string;
+  source: string;
+}
+
+export interface DeskSettings {
+  eli5: boolean;
+  higgsfield: { configured: boolean; image_model: string; video_model: string };
+  commands: DeskCommand[];
 }
 
 export interface Note {
@@ -111,8 +157,13 @@ export interface Note {
 export interface WorldSnapshot {
   agents: PersonalAgent[];
   edges: DelegationEdge[];
+  works?: WorkLink[];
+  projects?: ProjectPlot[];
   mission: Mission | null;
   hermes: ModelChoice;
+  eli5?: boolean;
+  higgsfield?: DeskSettings['higgsfield'];
+  commands?: DeskCommand[];
 }
 
 async function read<T>(path: string, init?: RequestInit): Promise<T> {
@@ -162,11 +213,37 @@ export const fetchGoals = () =>
     '/v1/personal/goals',
   );
 
+export const fetchSettings = () => read<DeskSettings>('/v1/personal/settings');
+
+export const updateSettings = (patch: { eli5?: boolean }) =>
+  read<DeskSettings>('/v1/personal/settings', {
+    method: 'PUT',
+    body: JSON.stringify(patch),
+  });
+
+export const fetchProjects = () => read<{ projects: ProjectPlot[] }>('/v1/personal/projects');
+
+export const createProject = (project: { name: string; summary?: string; accent?: string }) =>
+  read<ProjectPlot>('/v1/personal/projects', {
+    method: 'POST',
+    body: JSON.stringify(project),
+  });
+
+export const updateProject = (id: string, patch: { name?: string; summary?: string }) =>
+  read<ProjectPlot>(`/v1/personal/projects/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+
+export const deleteProject = (id: string) =>
+  read<{ deleted: boolean }>(`/v1/personal/projects/${id}`, { method: 'DELETE' });
+
 export const createGoal = (goal: {
   title: string;
   target: string;
   deadline?: string | null;
   progress?: number;
+  project_id?: string | null;
 }) =>
   read<Goal>('/v1/personal/goals', {
     method: 'POST',
@@ -204,10 +281,10 @@ export const askBrain = (question: string) =>
     body: JSON.stringify({ question }),
   });
 
-export function statusLabel(status: string): string {
-  if (status === 'working' || status === 'running') return 'Working';
-  if (status === 'done' || status === 'completed') return 'Done';
-  if (status === 'failed') return 'Stopped';
-  if (status === 'pending' || status === 'planning') return 'Queued';
-  return 'Idle';
+export function statusLabel(status: string, eli5 = false): string {
+  if (status === 'working' || status === 'running') return eli5 ? 'Busy' : 'Working';
+  if (status === 'done' || status === 'completed') return eli5 ? 'Finished' : 'Done';
+  if (status === 'failed') return eli5 ? 'Stopped' : 'Stopped';
+  if (status === 'pending' || status === 'planning') return eli5 ? 'Waiting' : 'Queued';
+  return eli5 ? 'Resting' : 'Idle';
 }

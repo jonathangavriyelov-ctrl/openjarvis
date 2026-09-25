@@ -5,11 +5,13 @@ import remarkGfm from 'remark-gfm';
 import {
   fetchMission,
   fetchMissions,
+  fetchSettings,
   statusLabel,
   submitMission,
+  type DeskCommand,
   type Mission,
 } from '../../lib/personal-api';
-import { OsError, OsShell } from './Shell';
+import { OsError, OsShell, useEli5 } from './Shell';
 import './personal.css';
 
 const COLUMNS = [
@@ -31,9 +33,11 @@ function visibleBrief(brief: string) {
 }
 
 export function ChiefPage() {
+  const eli5 = useEli5();
   const [request, setRequest] = useState('');
   const [mission, setMission] = useState<Mission | null>(null);
   const [history, setHistory] = useState<Mission[]>([]);
+  const [commands, setCommands] = useState<DeskCommand[]>([]);
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
 
@@ -51,6 +55,10 @@ export function ChiefPage() {
         }
       })
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetchSettings().then((settings) => setCommands(settings.commands)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -87,13 +95,30 @@ export function ChiefPage() {
 
   return (
     <OsShell
-      eyebrow="DELEGATION"
-      title="Chief of Staff"
-      lede="Give Jonathan's request here. The chief breaks it into tasks, sends each one to the specialist who owns that work, and files the finished pieces in the deliverables library."
+      eyebrow={eli5 ? 'ASK' : 'DELEGATION'}
+      title={eli5 ? 'The boss helper' : 'Chief of Staff'}
+      lede={
+        eli5
+          ? 'Say what you want. The boss helper splits it up and gives each piece to the right helper. The buttons below are SuperClaude commands.'
+          : 'Give a request, or start with a SuperClaude command. The chief routes /sc: commands to the specialists that command names, then files the finished pieces.'
+      }
     >
       {error && <OsError message={error} />}
       <form className="os-card" onSubmit={onSubmit}>
-        <label className="os-label" htmlFor="chief-request">Request</label>
+        <div className="command-row">
+          {commands.map((command) => (
+            <button
+              key={command.name}
+              type="button"
+              className="command-chip"
+              onClick={() => setRequest(`/sc:${command.name} `)}
+              title={command.summary}
+            >
+              /sc:{command.name}
+            </button>
+          ))}
+        </div>
+        <label className="os-label" htmlFor="chief-request">{eli5 ? 'What do you want?' : 'Request'}</label>
         <textarea
           id="chief-request"
           className="os-area"
@@ -111,7 +136,7 @@ export function ChiefPage() {
       {mission && (
         <section style={{ marginTop: 16 }}>
           <div className="os-card">
-            <h2>Plan · {statusLabel(mission.status)}</h2>
+            <h2>Plan · {statusLabel(mission.status, eli5)}{mission.command ? ` · /sc:${mission.command}` : ''}</h2>
             <p className="muted">{mission.request}</p>
             {mission.plan?.length > 0 && (
               <ol className="muted" style={{ marginTop: 10, paddingLeft: 18 }}>

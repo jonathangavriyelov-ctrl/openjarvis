@@ -2,21 +2,26 @@ import { useEffect, useState, type FormEvent } from 'react';
 import {
   createGoal,
   fetchGoals,
+  fetchProjects,
   runCheckin,
   setMilestone,
   updateGoal,
   type Goal,
+  type ProjectPlot,
 } from '../../lib/personal-api';
-import { OsError, OsShell } from './Shell';
+import { OsError, OsShell, useEli5 } from './Shell';
 import './personal.css';
 
 export function GoalsPage() {
+  const eli5 = useEli5();
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [projects, setProjects] = useState<ProjectPlot[]>([]);
   const [checkins, setCheckins] = useState(0);
   const [error, setError] = useState('');
   const [title, setTitle] = useState('');
   const [target, setTarget] = useState('');
   const [deadline, setDeadline] = useState('');
+  const [projectId, setProjectId] = useState('');
   const [busy, setBusy] = useState(false);
 
   const refresh = () => {
@@ -27,6 +32,7 @@ export function GoalsPage() {
         setError('');
       })
       .catch((err: Error) => setError(err.message));
+    fetchProjects().then((data) => setProjects(data.projects.filter((item) => item.id))).catch(() => {});
   };
 
   useEffect(() => {
@@ -42,6 +48,7 @@ export function GoalsPage() {
         title: title.trim(),
         target: target.trim() || 'Completed',
         deadline: deadline ? `${deadline}T23:59:59+00:00` : null,
+        project_id: projectId || null,
       });
       setTitle('');
       setTarget('');
@@ -56,9 +63,13 @@ export function GoalsPage() {
 
   return (
     <OsShell
-      eyebrow="PACE"
+      eyebrow={eli5 ? 'HOW YOU ARE DOING' : 'PACE'}
       title="Goals"
-      lede="Targets and deadlines live here. The pace badge compares progress with the calendar, and each goal schedules a daily check-in for the executive assistant."
+      lede={
+        eli5
+          ? 'A goal is something you want done by a day. The badge says if you are doing fine, need to hurry, or are behind.'
+          : 'Targets and deadlines live here. Put a goal on a project so it grows in that plot of the eco world.'
+      }
       action={
         <button
           className="os-ghost"
@@ -86,6 +97,14 @@ export function GoalsPage() {
         </label>
         <label className="os-label">Deadline
           <input className="os-field" type="date" value={deadline} onChange={(event) => setDeadline(event.target.value)} />
+        </label>
+        <label className="os-label">Project
+          <select className="os-field" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+            <option value="">{eli5 ? 'Not on a project yet' : 'No project'}</option>
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>{project.name}</option>
+            ))}
+          </select>
         </label>
         <button className="os-button" type="submit" disabled={busy || !title.trim()}>Add goal</button>
       </form>

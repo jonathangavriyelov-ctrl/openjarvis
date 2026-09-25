@@ -104,6 +104,30 @@ CREATE TABLE IF NOT EXISTS checkins (
     scheduler_task_id TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    accent TEXT NOT NULL DEFAULT '#7dcea0',
+    example INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS media (
+    id TEXT PRIMARY KEY,
+    deliverable_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    prompt TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    url TEXT NOT NULL DEFAULT '',
+    request_id TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -118,6 +142,16 @@ class PersonalStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
+        self._conn.commit()
+        for statement in (
+            "ALTER TABLE goals ADD COLUMN project_id TEXT",
+            "ALTER TABLE missions ADD COLUMN project_id TEXT",
+            "ALTER TABLE missions ADD COLUMN command TEXT NOT NULL DEFAULT ''",
+        ):
+            try:
+                self._conn.execute(statement)
+            except sqlite3.OperationalError:
+                pass
         self._conn.commit()
 
     def close(self) -> None:
@@ -138,14 +172,26 @@ class PersonalStore:
         progress: float = 0,
         milestones: list[dict[str, Any]] | None = None,
         notes: str = "",
+        project_id: str | None = None,
     ) -> dict[str, Any]:
         goal_id = _new_id()
         now = _now()
         with self._lock:
             self._conn.execute(
                 "INSERT INTO goals (id, title, target, deadline, progress, notes, "
-                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (goal_id, title, target, deadline, progress, notes, now, now),
+                "project_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    goal_id,
+                    title,
+                    target,
+                    deadline,
+                    progress,
+                    notes,
+                    project_id or None,
+                    now,
+                    now,
+                ),
             )
             for index, item in enumerate(milestones or []):
                 self._conn.execute(
@@ -209,6 +255,9 @@ class PersonalStore:
         allowed = ("title", "target", "deadline", "progress", "notes")
         sets: list[str] = []
         values: list[Any] = []
+        if "project_id" in fields:
+            sets.append("project_id = ?")
+            values.append(fields["project_id"] or None)
         for key in allowed:
             if key in fields and fields[key] is not None:
                 sets.append(f"{key} = ?")
@@ -255,14 +304,20 @@ class PersonalStore:
 
     # -- missions ------------------------------------------------------------
 
-    def create_mission(self, request: str) -> dict[str, Any]:
+    def create_mission(
+        self,
+        request: str,
+        *,
+        project_id: str = "",
+        command: str = "",
+    ) -> dict[str, Any]:
         mission_id = _new_id()
         now = _now()
         with self._lock:
             self._conn.execute(
-                "INSERT INTO missions (id, request, status, created_at, updated_at) "
-                "VALUES (?, ?, 'planning', ?, ?)",
-                (mission_id, request, now, now),
+                "INSERT INTO missions (id, request, status, project_id, command, "
+                "created_at, updated_at) VALUES (?, ?, 'planning', ?, ?, ?, ?)",
+                (mission_id, request, project_id or None, command, now, now),
             )
             self._conn.commit()
         mission = self.get_mission(mission_id)
@@ -473,7 +528,12 @@ class PersonalStore:
                     "SELECT * FROM deliverables ORDER BY created_at DESC LIMIT ?",
                     (limit,),
                 ).fetchall()
-        return [dict(row) for row in rows]
+            items = []
+            for row in rows:
+                data = dict(row)
+                data["media"] = self._media_rows(data["id"])
+                items.append(data)
+            return items
 
     # -- notes ---------------------------------------------------------------
 
@@ -605,3 +665,185 @@ class PersonalStore:
                 "SELECT * FROM checkins ORDER BY created_at DESC"
             ).fetchall()
         return [dict(row) for row in rows]
+
+    # -- projects, settings, media ------------------------------------------
+
+    def ensure_example_projects(self) -> None:
+        """Seed two example projects once. Deleting them does not bring them back."""
+        if self.get_setting("examples_seeded") == "1":
+            return
+        self.set_setting("examples_seeded", "1")
+        with self._lock:
+            count = self._conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+            if count:
+                return
+        self.create_project(
+            "Quick Funders CRM",
+            summary="Leads, deals, and the next follow-up.",
+            accent="#7dcea0",
+            example=True,
+        )
+        self.create_project(
+            "Self Audit",
+            summary="Money in, money out, and what to check.",
+            accent="#f5c16c",
+            example=True,
+        )
+
+    def create_project(
+        self,
+        name: str,
+        *,
+        summary: str = "",
+        accent: str = "#7dcea0",
+        example: bool = False,
+    ) -> dict[str, Any]:
+        project_id = _new_id()
+        now = _now()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO projects (id, name, summary, accent, example, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    project_id,
+                    name.strip(),
+                    summary.strip(),
+                    accent,
+                    int(example),
+                    now,
+                    now,
+                ),
+            )
+            self._conn.commit()
+        project = self.get_project(project_id)
+        assert project is not None
+        return project
+
+    def list_projects(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM projects ORDER BY created_at"
+            ).fetchall()
+        return [self._project(row) for row in rows]
+
+    def get_project(self, project_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM projects WHERE id = ?", (project_id,)
+            ).fetchone()
+        return self._project(row) if row else None
+
+    def update_project(self, project_id: str, **fields: Any) -> dict[str, Any] | None:
+        sets: list[str] = []
+        values: list[Any] = []
+        for key in ("name", "summary", "accent"):
+            if key in fields and fields[key] is not None:
+                sets.append(f"{key} = ?")
+                values.append(fields[key])
+        if not sets:
+            return self.get_project(project_id)
+        sets.append("updated_at = ?")
+        values.append(_now())
+        values.append(project_id)
+        with self._lock:
+            cur = self._conn.execute(
+                f"UPDATE projects SET {', '.join(sets)} WHERE id = ?",
+                values,
+            )
+            self._conn.commit()
+            if cur.rowcount == 0:
+                return None
+        return self.get_project(project_id)
+
+    def delete_project(self, project_id: str) -> bool:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE goals SET project_id = NULL WHERE project_id = ?",
+                (project_id,),
+            )
+            self._conn.execute(
+                "UPDATE missions SET project_id = NULL WHERE project_id = ?",
+                (project_id,),
+            )
+            cur = self._conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    @staticmethod
+    def _project(row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        data["example"] = bool(data.get("example"))
+        return data
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM settings WHERE key = ?", (key,)
+            ).fetchone()
+        return row["value"] if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+            self._conn.commit()
+
+    def add_media(self, deliverable_id: str, asset: dict[str, Any]) -> dict[str, Any]:
+        now = _now()
+        row = {
+            "id": _new_id(),
+            "deliverable_id": deliverable_id,
+            "kind": asset.get("kind") or "image",
+            "prompt": asset.get("prompt") or "",
+            "status": asset.get("status") or "skipped",
+            "url": asset.get("url") or "",
+            "request_id": asset.get("request_id") or "",
+            "detail": asset.get("detail") or "",
+            "created_at": now,
+        }
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO media (id, deliverable_id, kind, prompt, status, url, "
+                "request_id, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row["id"],
+                    row["deliverable_id"],
+                    row["kind"],
+                    row["prompt"],
+                    row["status"],
+                    row["url"],
+                    row["request_id"],
+                    row["detail"],
+                    row["created_at"],
+                ),
+            )
+            self._conn.commit()
+        return row
+
+    def _media_rows(self, deliverable_id: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM media WHERE deliverable_id = ? ORDER BY created_at",
+            (deliverable_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def tasks_for_project(
+        self, project_id: str, limit: int = 8
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT tasks.* FROM tasks JOIN missions "
+                "ON missions.id = tasks.mission_id "
+                "WHERE missions.project_id = ? "
+                "ORDER BY tasks.updated_at DESC LIMIT ?",
+                (project_id, limit),
+            ).fetchall()
+        tasks = []
+        for row in rows:
+            data = dict(row)
+            data["a2a"] = json.loads(data.pop("a2a_json") or "{}")
+            tasks.append(data)
+        return tasks

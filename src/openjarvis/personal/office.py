@@ -18,6 +18,7 @@ from openjarvis.personal.hermes import (
     resolve_configured_model,
     resolve_executive_model,
 )
+from openjarvis.personal.higgsfield import HiggsfieldClient, resolve_credentials
 from openjarvis.personal.memory_bridge import MemoryBridge
 from openjarvis.personal.planner import plan_from_model_text, plan_request
 from openjarvis.personal.specialists import (
@@ -28,6 +29,12 @@ from openjarvis.personal.specialists import (
     render_system_prompt,
 )
 from openjarvis.personal.store import PersonalStore
+from openjarvis.personal.superclaude import (
+    find_command,
+    list_commands,
+    load_command_dir,
+    prompt_addons,
+)
 from openjarvis.workflow.engine import WorkflowEngine
 from openjarvis.workflow.graph import WorkflowGraph
 from openjarvis.workflow.types import (
@@ -38,6 +45,20 @@ from openjarvis.workflow.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _visual_section(assets: list[dict[str, Any]]) -> str:
+    lines = ["", "## Pictures and clips"]
+    for asset in assets:
+        url = asset.get("url") or ""
+        if url and asset.get("kind") == "image":
+            lines.append(f"![picture]({url})")
+        elif url:
+            lines.append(f"- Video: {url}")
+        else:
+            note = asset.get("detail") or asset.get("status") or "No picture yet."
+            lines.append(f"- {note}")
+    return "\n".join(lines)
 
 _PLAN_INSTRUCTION = (
     "Split the request into tasks. Reply with JSON only, no markdown:\n"
@@ -92,8 +113,14 @@ class PersonalOffice:
         fallback_model: str = "",
         default_model: str = "",
         schedule_checkins: bool = True,
+        higgsfield_key: str = "",
+        higgsfield_image_model: str = "",
+        higgsfield_video_model: str = "",
+        superclaude_dir: str = "",
+        higgsfield: HiggsfieldClient | None = None,
     ) -> None:
         self.store = PersonalStore(db_path)
+        self.store.ensure_example_projects()
         self.engine = engine
         self.memory = MemoryBridge(memory)
         self.scheduler = scheduler
@@ -102,6 +129,13 @@ class PersonalOffice:
         self.fallback_model = fallback_model or ""
         self.default_model = default_model or ""
         self.schedule_checkins = schedule_checkins
+        self.superclaude_dir = superclaude_dir or ""
+        self.higgsfield = higgsfield or HiggsfieldClient(
+            resolve_credentials(higgsfield_key),
+            image_model=higgsfield_image_model,
+            video_model=higgsfield_video_model,
+        )
+        self._turn: dict[str, Any] = {"eli5": False, "command": None}
         self._run_lock = threading.Lock()
         self._thread_lock = threading.Lock()
         self._threads: dict[str, threading.Thread] = {}
@@ -166,8 +200,12 @@ class PersonalOffice:
         if choice.source == "offline" or not choice.model_id or self.engine is None:
             return None
         spec = get_specialist(specialist_id)
+        extra = prompt_addons(
+            self._turn.get("command"),
+            eli5=bool(self._turn.get("eli5")),
+        )
         messages = [
-            Message(role=Role.SYSTEM, content=render_system_prompt(spec)),
+            Message(role=Role.SYSTEM, content=render_system_prompt(spec, extra=extra)),
             Message(role=Role.USER, content=user_text),
         ]
         try:
@@ -204,6 +242,7 @@ class PersonalOffice:
         target: str = "Completed",
         deadline: str | None = None,
         progress: float = 0,
+        project_id: str | None = None,
     ) -> dict[str, Any]:
         goal = self.store.create_goal(
             title.strip(),
@@ -211,6 +250,7 @@ class PersonalOffice:
             deadline=deadline or None,
             progress=progress,
             milestones=default_milestones(title.strip()),
+            project_id=project_id,
         )
         self._schedule_checkin(goal)
         return self._decorate_goal(goal)
@@ -309,11 +349,21 @@ class PersonalOffice:
 
     # -- missions ------------------------------------------------------------
 
-    def submit_mission(self, request: str) -> dict[str, Any]:
+    def submit_mission(
+        self, request: str, *, project_id: str | None = None
+    ) -> dict[str, Any]:
         text = (request or "").strip()
         if not text:
             raise ValueError("Tell the chief of staff what you need.")
-        mission = self.store.create_mission(text)
+        command = find_command(text, self._loaded_commands())
+        project = self.store.get_project(project_id) if project_id else None
+        if project is None:
+            project = self._project_named_in(text)
+        mission = self.store.create_mission(
+            text,
+            project_id=project["id"] if project else "",
+            command=command.name if command else "",
+        )
         thread = threading.Thread(
             target=self._execute,
             args=(mission["id"],),
@@ -381,9 +431,14 @@ class PersonalOffice:
             "executive_assistant": executive,
             "configured": configured,
         }
+        command = find_command(request, self._loaded_commands())
+        self._turn = {"eli5": self.eli5_enabled(), "command": command}
         planned = None
         planner_source = "offline"
-        if configured.source != "offline":
+        if command is not None:
+            planned = plan_request(request, command=command)
+            planner_source = "superclaude"
+        elif configured.source != "offline":
             worker_ids = ", ".join(
                 spec.id for spec in list_specialists(include_chief=False)
             )
@@ -406,19 +461,22 @@ class PersonalOffice:
                 "planner": configured.to_dict(),
                 "planner_source": planner_source if planned else "offline",
                 "executive_assistant": executive.to_dict(),
+                "command": command.name if command else "",
+                "eli5": bool(self._turn.get("eli5")),
             },
         )
+        project_id = mission.get("project_id") or ""
         tasks = []
         for index, item in enumerate(planned):
-            tasks.append(
-                self.store.add_task(
-                    mission_id,
-                    item.specialist_id,
-                    item.title,
-                    item.brief,
-                    index,
-                )
+            row = self.store.add_task(
+                mission_id,
+                item.specialist_id,
+                item.title,
+                item.brief,
+                index,
             )
+            row["project_id"] = project_id
+            tasks.append(row)
         self.store.set_agent_state(
             "chief_of_staff",
             "working",
@@ -538,6 +596,7 @@ class PersonalOffice:
         model_text = self._generate(choice, spec.id, task["brief"] + memory_block)
         source = choice.source if model_text else "offline"
         model_id = choice.model_id if model_text else ""
+        command = self._turn.get("command")
         produced = produce_for(
             spec,
             ProduceContext(
@@ -546,13 +605,17 @@ class PersonalOffice:
                 model_text=model_text,
                 memory_hits=hits,
                 goals=self.store.list_goals(),
+                eli5=bool(self._turn.get("eli5")),
+                persona_note=getattr(command, "instructions", "") or "",
             ),
         )
+        project_id = task.get("project_id") or ""
         if produced.goal:
             self.create_goal(
                 produced.goal["title"],
                 target=produced.goal.get("target") or "Completed",
                 deadline=produced.goal.get("deadline"),
+                project_id=project_id or None,
             )
         if produced.note:
             self.capture_note(
@@ -560,27 +623,37 @@ class PersonalOffice:
                 produced.note["body"],
                 tags=produced.note.get("tags") or "",
             )
+        body = produced.body
+        assets: list[dict[str, Any]] = []
+        if produced.visual_prompt:
+            assets = self.higgsfield.illustrate(
+                produced.visual_prompt,
+                video=produced.want_video,
+            )
+            body = f"{body.rstrip()}\n{_visual_section(assets)}"
         deliverable = self.store.add_deliverable(
             mission_id=task["mission_id"],
             task_id=task["id"],
             specialist_id=spec.id,
             title=produced.title,
             kind=produced.kind,
-            body=produced.body,
+            body=body,
             model_id=model_id,
             model_source=source,
         )
+        for asset in assets:
+            self.store.add_media(deliverable["id"], asset)
         a2a.state = TaskState.COMPLETED
-        a2a.output_text = produced.body
+        a2a.output_text = body
         self.store.update_task(
             task["id"],
             status="done",
-            output=produced.body,
+            output=body,
             a2a=a2a.to_dict(),
         )
         self.store.set_agent_state(spec.id, "done", produced.title)
         del node, deliverable
-        return produced.body
+        return body
 
     def _recall(self, query: str) -> list[str]:
         hits = [note["body"] for note in self.store.search_notes(query, limit=3)]
@@ -623,11 +696,30 @@ class PersonalOffice:
                         "task_id": task["id"],
                     }
                 )
+        projects = self.project_board()
+        works: list[dict[str, Any]] = []
+        for project in projects:
+            for task in project.get("tasks") or []:
+                works.append(
+                    {
+                        "from": task["specialist_id"],
+                        "to": project["id"],
+                        "status": task["status"],
+                        "title": task["title"],
+                    }
+                )
         return {
             "agents": self.roster(),
             "edges": edges,
+            "works": works,
+            "projects": projects,
             "mission": mission,
             "hermes": self.model_choices()["executive_assistant"],
+            "eli5": self.eli5_enabled(),
+            "higgsfield": self.higgsfield.public_status(),
+            "commands": [
+                item.to_dict() for item in list_commands(self._loaded_commands())
+            ],
         }
 
     def agent_view(self, specialist_id: str) -> dict[str, Any]:
@@ -640,6 +732,66 @@ class PersonalOffice:
             for manifest in spec.skill_manifests()
         ]
         return row
+
+    def eli5_enabled(self) -> bool:
+        return self.store.get_setting("eli5", "0") == "1"
+
+    def set_eli5(self, enabled: bool) -> bool:
+        self.store.set_setting("eli5", "1" if enabled else "0")
+        return self.eli5_enabled()
+
+    def settings_view(self) -> dict[str, Any]:
+        return {
+            "eli5": self.eli5_enabled(),
+            "higgsfield": self.higgsfield.public_status(),
+            "commands": [
+                item.to_dict() for item in list_commands(self._loaded_commands())
+            ],
+        }
+
+    def _loaded_commands(self) -> list[Any]:
+        return load_command_dir(self.superclaude_dir)
+
+    def _project_named_in(self, text: str) -> dict[str, Any] | None:
+        lowered = text.lower()
+        found: dict[str, Any] | None = None
+        for project in self.store.list_projects():
+            name = project["name"].strip().lower()
+            if name and name in lowered and (
+                found is None or len(name) > len(found["name"])
+            ):
+                found = project
+        return found
+
+    def project_board(self) -> list[dict[str, Any]]:
+        """Projects with the goals and tasks living on them."""
+        goals = self.list_goals()
+        board = []
+        for project in self.store.list_projects():
+            row = dict(project)
+            row["goals"] = [
+                goal for goal in goals if goal.get("project_id") == project["id"]
+            ]
+            row["tasks"] = self.store.tasks_for_project(project["id"])
+            board.append(row)
+        loose_goals = [goal for goal in goals if not goal.get("project_id")]
+        mission = self.store.latest_mission()
+        loose_tasks: list[dict[str, Any]] = []
+        if mission is not None and not mission.get("project_id"):
+            loose_tasks = self.store.tasks_for(mission["id"])
+        if loose_goals or loose_tasks:
+            board.append(
+                {
+                    "id": "",
+                    "name": "Right now",
+                    "summary": "Work that is not on a named project yet.",
+                    "accent": "#9ec9f5",
+                    "example": False,
+                    "goals": loose_goals,
+                    "tasks": loose_tasks,
+                }
+            )
+        return board
 
     def agent_cards(self) -> list[dict[str, Any]]:
         """A2A agent cards for the team, so they can be discovered later."""

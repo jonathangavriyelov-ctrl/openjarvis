@@ -3,10 +3,11 @@ import { Link } from 'react-router';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { fetchDeliverables, fetchWorld, type Deliverable, type PersonalAgent } from '../../lib/personal-api';
-import { OsError, OsShell } from './Shell';
+import { OsError, OsShell, useEli5 } from './Shell';
 import './personal.css';
 
 export function DeliverablesPage() {
+  const eli5 = useEli5();
   const [items, setItems] = useState<Deliverable[]>([]);
   const [agents, setAgents] = useState<PersonalAgent[]>([]);
   const [filter, setFilter] = useState('');
@@ -30,9 +31,13 @@ export function DeliverablesPage() {
 
   return (
     <OsShell
-      eyebrow="LIBRARY"
-      title="Deliverables"
-      lede="Finished work the chief of staff collected from the team. Open a piece to read it, or jump back to the specialist who made it."
+      eyebrow={eli5 ? 'DONE' : 'LIBRARY'}
+      title={eli5 ? 'Finished work' : 'Deliverables'}
+      lede={
+        eli5
+          ? 'This is the work the helpers finished. Open one to read it. Pictures show up when Higgsfield is connected.'
+          : 'Finished work the chief collected. Marketing pieces can include a Higgsfield picture or short video when a key is set.'
+      }
     >
       {error && <OsError message={error} />}
       <div className="chip-row">
@@ -67,6 +72,19 @@ export function DeliverablesPage() {
             {open === item.id && (
               <div className="prose">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.body}</ReactMarkdown>
+                {!!item.media?.length && (
+                  <div className="media-row">
+                    {item.media.map((asset) =>
+                      asset.url && asset.kind === 'video' ? (
+                        <video key={asset.id} src={asset.url} controls />
+                      ) : asset.url ? (
+                        <img key={asset.id} src={asset.url} alt={asset.prompt || 'Generated picture'} />
+                      ) : (
+                        <p key={asset.id} className="muted">{asset.detail}</p>
+                      ),
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </article>

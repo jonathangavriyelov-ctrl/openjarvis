@@ -31,6 +31,8 @@ class Produced:
     body: str
     goal: dict[str, Any] | None = None
     note: dict[str, Any] | None = None
+    visual_prompt: str = ""
+    want_video: bool = False
 
 
 @dataclass(slots=True)
@@ -42,6 +44,8 @@ class ProduceContext:
     model_text: str | None = None
     memory_hits: list[str] = field(default_factory=list)
     goals: list[Mapping[str, Any]] = field(default_factory=list)
+    eli5: bool = False
+    persona_note: str = ""
 
 
 Producer = Callable[[ProduceContext], Produced]
@@ -123,6 +127,20 @@ def _produce_executive(ctx: ProduceContext) -> Produced:
         title = f"Goal on the board: {_clip(goal['title'], 64)}"
     if ctx.model_text:
         body = ctx.model_text.strip()
+    elif ctx.eli5:
+        parts = [
+            "## What to do today",
+            "1. Pick one small thing and finish it.",
+            "2. Look at your goals. Help the one that is behind.",
+            "3. Write down anything new so you do not forget.",
+            "",
+            "## Your goals",
+            _goals_block(list(ctx.goals)),
+            "",
+            "## A question",
+            "What would make tomorrow feel good?",
+        ]
+        body = "\n".join(parts)
     else:
         parts = [
             "## Today's priorities",
@@ -167,8 +185,27 @@ def _produce_executive(ctx: ProduceContext) -> Produced:
 def _produce_marketing(ctx: ProduceContext) -> Produced:
     subject = _clip(ctx.request, 90) or "the work in front of you"
     title = f"Content for {_clip(subject, 48)}"
+    video_words = ("video", "clip", "reel", "short film")
+    want_video = any(word in ctx.request.lower() for word in video_words)
     if ctx.model_text:
         body = ctx.model_text.strip()
+    elif ctx.eli5:
+        body = "\n".join(
+            [
+                "## Ideas",
+                f"1. Say one clear thing about: {subject}",
+                "2. Tell a tiny story of what changed.",
+                "3. Show one real example.",
+                "",
+                "## A draft",
+                f"Here is a simple post about {subject}.",
+                "",
+                "## This week",
+                "- Monday: share the draft.",
+                "- Wednesday: share one example.",
+                "- Friday: say what got done.",
+            ]
+        )
     else:
         body = "\n".join(
             [
@@ -191,7 +228,13 @@ def _produce_marketing(ctx: ProduceContext) -> Produced:
                 "Add variants only after the first draft exists.",
             ]
         )
-    return Produced(title=title, kind="content", body=body)
+    return Produced(
+        title=title,
+        kind="content",
+        body=body,
+        visual_prompt=subject,
+        want_video=want_video,
+    )
 
 
 def _produce_second_brain(ctx: ProduceContext) -> Produced:
@@ -199,6 +242,24 @@ def _produce_second_brain(ctx: ProduceContext) -> Produced:
     hits = ctx.memory_hits[:5]
     if ctx.model_text:
         body = ctx.model_text.strip()
+    elif ctx.eli5:
+        remembered = (
+            "\n".join(f"- {_clip(hit, 160)}" for hit in hits)
+            if hits
+            else "- Nothing saved yet. This is the first note."
+        )
+        body = "\n".join(
+            [
+                "## Saved",
+                ctx.request.strip(),
+                "",
+                "## In simple words",
+                "I put this in your notes so you can ask about it later.",
+                "",
+                "## Already saved",
+                remembered,
+            ]
+        )
     else:
         remembered = (
             "\n".join(f"- {_clip(hit, 220)}" for hit in hits)
@@ -326,7 +387,7 @@ def list_specialists(*, include_chief: bool = True) -> list[Specialist]:
     return specs
 
 
-def render_system_prompt(spec: Specialist) -> str:
+def render_system_prompt(spec: Specialist, *, extra: str = "") -> str:
     """System prompt plus the skill procedures this specialist is built with."""
     lines = [spec.system_prompt.strip(), "", "Procedures:"]
     manifests = spec.skill_manifests()
@@ -336,6 +397,8 @@ def render_system_prompt(spec: Specialist) -> str:
         lines.append(f"- {manifest.name}: {manifest.description}")
         if manifest.markdown_content:
             lines.append(f"  {manifest.markdown_content}")
+    if extra.strip():
+        lines.extend(["", extra.strip()])
     return "\n".join(lines)
 
 

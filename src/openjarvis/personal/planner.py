@@ -46,16 +46,36 @@ def _workers() -> list[Specialist]:
 def plan_request(
     request: str,
     specialists: Sequence[Specialist] | None = None,
+    *,
+    command: Any = None,
 ) -> list[PlannedTask]:
     """Assign the request to every specialist whose triggers match.
 
-    A request that matches nobody still gets a real split: the executive
-    assistant owns the next actions, and the second brain captures it. An
-    audience-facing general request also includes marketing.
+    A ``/sc:`` command routes to the specialists that command names. A request
+    that matches nobody still gets a real split: the executive assistant owns
+    the next actions, and the second brain captures it. An audience-facing
+    general request also includes marketing.
     """
     text = (request or "").strip()
     lowered = text.lower()
     roster = list(specialists) if specialists is not None else _workers()
+    if command is not None:
+        by_id = {spec.id: spec for spec in roster}
+        directed = [
+            by_id[spec_id]
+            for spec_id in getattr(command, "specialists", ())
+            if spec_id in by_id
+        ]
+        if directed:
+            label = getattr(command, "name", "command")
+            return [
+                PlannedTask(
+                    specialist_id=spec.id,
+                    title=f"/sc:{label} — {spec.name}",
+                    brief=spec.task_brief(text),
+                )
+                for spec in directed
+            ]
     matched = [
         spec
         for spec in roster

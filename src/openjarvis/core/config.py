@@ -1773,6 +1773,12 @@ class PersonalConfig:
     hermes_model: str = "hermes3"
     fallback_model: str = ""
     schedule_checkins: bool = True
+    # ``key_id:key_secret``. Prefer the HF_KEY env var. Never commit a real key.
+    higgsfield_key: str = ""
+    higgsfield_image_model: str = "higgsfield-ai/soul/v2/standard"
+    higgsfield_video_model: str = "bytedance/seedance-2.0/text-to-video"
+    # Directory of SuperClaude ``/sc:*`` markdown, if installed.
+    superclaude_dir: str = ""
 
 
 @dataclass
