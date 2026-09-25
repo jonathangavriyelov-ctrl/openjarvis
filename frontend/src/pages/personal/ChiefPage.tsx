@@ -3,13 +3,21 @@ import { Link } from 'react-router';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
+  approveProposal,
+  fetchBriefing,
   fetchMission,
   fetchMissions,
+  fetchPhone,
+  fetchProposals,
   fetchSettings,
+  rejectProposal,
   statusLabel,
   submitMission,
+  type Briefing,
   type DeskCommand,
   type Mission,
+  type PhoneStatus,
+  type Proposal,
 } from '../../lib/personal-api';
 import { OsError, OsShell, useEli5 } from './Shell';
 import './personal.css';
@@ -38,8 +46,17 @@ export function ChiefPage() {
   const [mission, setMission] = useState<Mission | null>(null);
   const [history, setHistory] = useState<Mission[]>([]);
   const [commands, setCommands] = useState<DeskCommand[]>([]);
+  const [briefing, setBriefing] = useState<Briefing | null>(null);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [phone, setPhone] = useState<PhoneStatus | null>(null);
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
+
+  const refreshDesk = () => {
+    fetchBriefing().then(setBriefing).catch(() => {});
+    fetchProposals().then((data) => setProposals(data.proposals)).catch(() => {});
+    fetchPhone().then(setPhone).catch(() => {});
+  };
 
   const refreshHistory = () => {
     fetchMissions().then((data) => setHistory(data.missions)).catch(() => {});
@@ -59,6 +76,7 @@ export function ChiefPage() {
 
   useEffect(() => {
     fetchSettings().then((settings) => setCommands(settings.commands)).catch(() => {});
+    refreshDesk();
   }, []);
 
   useEffect(() => {
@@ -67,7 +85,10 @@ export function ChiefPage() {
       fetchMission(mission.id)
         .then((next) => {
           setMission(next);
-          if (next.status === 'completed' || next.status === 'failed') refreshHistory();
+          if (next.status === 'completed' || next.status === 'failed') {
+            refreshHistory();
+            refreshDesk();
+          }
         })
         .catch((err: Error) => setError(err.message));
     }, 800);
@@ -132,6 +153,87 @@ export function ChiefPage() {
           </button>
         </div>
       </form>
+
+      <div className="os-grid" style={{ marginTop: 16 }}>
+        <section className="os-card">
+          <h2>{eli5 ? 'Mail and meetings' : 'Inbox and calendar'}</h2>
+          <p className="muted">{briefing?.google.detail || 'Google is not connected.'}</p>
+          {(briefing?.inbox.length ?? 0) > 0 && (
+            <ul className="muted" style={{ paddingLeft: 18 }}>
+              {briefing?.inbox.slice(0, 5).map((item) => (
+                <li key={`${item.from}-${item.subject}`}>
+                  <strong>{item.subject}</strong>
+                  {item.from ? ` — ${item.from}` : ''}
+                </li>
+              ))}
+            </ul>
+          )}
+          {(briefing?.meetings.length ?? 0) > 0 && (
+            <ul className="muted" style={{ paddingLeft: 18 }}>
+              {briefing?.meetings.slice(0, 5).map((item) => (
+                <li key={`${item.title}-${item.when}`}>
+                  {item.title}{item.when ? ` — ${item.when}` : ''}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+        <section className="os-card">
+          <h2>{eli5 ? 'Your phone' : 'Phone'}</h2>
+          <p className="muted">{phone?.telegram.detail || 'Telegram is not connected.'}</p>
+          <p className="muted">{phone?.slack.detail || 'Slack is not connected.'}</p>
+        </section>
+      </div>
+
+      <section className="os-card" style={{ marginTop: 16 }}>
+        <h2>{eli5 ? 'Things waiting for you' : 'Drafts waiting for approval'}</h2>
+        <p className="muted">
+          {eli5
+            ? 'Helpers can write a draft. They cannot send it until you say yes.'
+            : 'Agents file email and calendar drafts here. They do not send or change the calendar until you approve.'}
+        </p>
+        <div className="stack" style={{ marginTop: 12 }}>
+          {proposals.map((proposal) => (
+            <article key={proposal.id} className="note-card">
+              <div className="note-top">
+                <h2>{proposal.title}</h2>
+                <span className="chip">{proposal.status}</span>
+              </div>
+              <p className="muted" style={{ whiteSpace: 'pre-wrap' }}>
+                {proposal.payload.body || proposal.payload.description || proposal.payload.summary}
+              </p>
+              {proposal.detail && <p className="muted">{proposal.detail}</p>}
+              {proposal.status === 'pending' && (
+                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                  <button
+                    className="os-button"
+                    type="button"
+                    onClick={() => {
+                      approveProposal(proposal.id)
+                        .then(() => refreshDesk())
+                        .catch((err: Error) => setError(err.message));
+                    }}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    className="os-ghost"
+                    type="button"
+                    onClick={() => {
+                      rejectProposal(proposal.id)
+                        .then(() => refreshDesk())
+                        .catch((err: Error) => setError(err.message));
+                    }}
+                  >
+                    Reject
+                  </button>
+                </div>
+              )}
+            </article>
+          ))}
+          {proposals.length === 0 && <p className="muted">No drafts yet.</p>}
+        </div>
+      </section>
 
       {mission && (
         <section style={{ marginTop: 16 }}>

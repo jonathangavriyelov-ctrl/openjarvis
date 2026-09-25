@@ -1272,6 +1272,8 @@ class SlackChannelConfig:
 
     bot_token: str = ""
     app_token: str = ""
+    # Comma-separated Slack user ids allowed to command the personal desk.
+    allowed_user_ids: str = ""
 
 
 @dataclass(slots=True)
@@ -1787,6 +1789,13 @@ class PersonalConfig:
     omniroute_api_key: str = ""
     omniroute_model: str = "auto"
     omniroute_models: dict[str, str] = field(default_factory=dict)
+    # Path to a Google OAuth token file. Prefer GOOGLE_CREDENTIALS_PATH,
+    # or GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN.
+    # Never commit those values.
+    google_credentials_path: str = ""
+    # Phone allow-lists. Prefer TELEGRAM_CHAT_ID and SLACK_ALLOWED_USER_ID.
+    telegram_chat_id: str = ""
+    slack_user_id: str = ""
 
 
 @dataclass

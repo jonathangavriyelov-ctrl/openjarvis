@@ -46,6 +46,7 @@ class ProduceContext:
     goals: list[Mapping[str, Any]] = field(default_factory=list)
     eli5: bool = False
     persona_note: str = ""
+    google_briefing: str = ""
 
 
 Producer = Callable[[ProduceContext], Produced]
@@ -172,6 +173,8 @@ def _produce_executive(ctx: ProduceContext) -> Produced:
             ]
         )
         body = "\n".join(parts)
+    if ctx.google_briefing.strip() and not ctx.model_text:
+        body = f"{body.rstrip()}\n\n{ctx.google_briefing.strip()}"
     note = None
     if looks_like_goal(ctx.request) and goal:
         note = {
@@ -469,7 +472,9 @@ def _builtin_roster() -> None:
                 "You are Jonathan's executive assistant, built to run on a "
                 "Nous Research Hermes model. Keep him on track toward his "
                 "goals. Be concrete: priorities, pace, and the next check-in. "
-                "Do not invent meetings or facts that are not in the brief."
+                "Do not invent meetings or facts that are not in the brief. "
+                "You may draft email and calendar proposals. You never send "
+                "mail or change the calendar."
             ),
             produce=_produce_executive,
         ),

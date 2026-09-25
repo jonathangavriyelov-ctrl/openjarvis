@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { askBrain, captureNote, fetchNotes, type Note } from '../../lib/personal-api';
+import { askBrain, captureNote, fetchBriefing, fetchNotes, pullDrive, type Note } from '../../lib/personal-api';
 import { OsError, OsShell } from './Shell';
 import './personal.css';
 
@@ -8,6 +8,8 @@ export function SecondBrainPage() {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [question, setQuestion] = useState('');
+  const [driveQuery, setDriveQuery] = useState('');
+  const [driveNote, setDriveNote] = useState('');
   const [answer, setAnswer] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -18,13 +20,18 @@ export function SecondBrainPage() {
 
   useEffect(() => {
     refresh();
+    fetchBriefing()
+      .then((data) => {
+        if (!data.connected) setDriveNote('Google Drive is not connected.');
+      })
+      .catch(() => {});
   }, []);
 
   return (
     <OsShell
       eyebrow="MEMORY"
       title="Second Brain"
-      lede="Notes and ideas land here and, when the memory backend is available, in OpenJarvis memory too. Ask a question and the answer comes from what has been captured."
+      lede="Notes and ideas land here and, when the memory backend is available, in OpenJarvis memory too. Pull matching Google Drive docs into the same list. Ask a question and the answer comes from what has been captured."
     >
       {error && <OsError message={error} />}
       <div className="os-grid">
@@ -68,6 +75,45 @@ export function SecondBrainPage() {
           {answer && <p className="muted" style={{ marginTop: 14, whiteSpace: 'pre-wrap' }}>{answer}</p>}
         </form>
       </div>
+      <form
+        className="os-card"
+        style={{ marginTop: 16 }}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!driveQuery.trim()) return;
+          setBusy(true);
+          setDriveNote('');
+          pullDrive(driveQuery)
+            .then((data) => {
+              if (!data.connected) {
+                setDriveNote('Google Drive is not connected.');
+              } else if (data.notes.length === 0) {
+                setDriveNote('No new matching Drive docs.');
+              } else {
+                setDriveNote(`Saved ${data.notes.length} Drive doc${data.notes.length === 1 ? '' : 's'}.`);
+              }
+              setDriveQuery('');
+              refresh();
+            })
+            .catch((err: Error) => setError(err.message))
+            .finally(() => setBusy(false));
+        }}
+      >
+        <label className="os-label" htmlFor="drive-query">Pull from Drive</label>
+        {driveNote && (
+          <p role="status" style={{ margin: '8px 0 12px', color: '#f5c16c' }}>{driveNote}</p>
+        )}
+        <input
+          id="drive-query"
+          className="os-field"
+          value={driveQuery}
+          onChange={(event) => setDriveQuery(event.target.value)}
+          placeholder="pricing notes"
+        />
+        <button className="os-button" style={{ marginTop: 12 }} type="submit" disabled={busy || !driveQuery.trim()}>
+          Pull from Drive
+        </button>
+      </form>
       <div className="stack" style={{ marginTop: 16 }}>
         {notes.map((note) => (
           <article key={note.id} className="note-card">

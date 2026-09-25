@@ -214,6 +214,8 @@ export function WorldPage() {
             : world?.omniroute?.configured
               ? ` ${world.omniroute.detail}`
               : ''}
+          {world?.google?.connected ? ` ${world.google.detail}` : ''}
+          {world?.phone?.telegram?.listening ? ' Telegram can reach the chief.' : ''}
         </p>
       </section>
 

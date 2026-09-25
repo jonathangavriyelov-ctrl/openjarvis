@@ -128,6 +128,17 @@ CREATE TABLE IF NOT EXISTS media (
     detail TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS proposals (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending',
+    detail TEXT NOT NULL DEFAULT '',
+    mission_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -822,6 +833,65 @@ class PersonalStore:
             )
             self._conn.commit()
         return row
+
+    def add_proposal(
+        self,
+        *,
+        kind: str,
+        title: str,
+        payload: dict[str, Any],
+        mission_id: str = "",
+    ) -> dict[str, Any]:
+        now = _now()
+        row_id = _new_id()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO proposals (id, kind, title, payload_json, status, "
+                "detail, mission_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, 'pending', '', ?, ?, ?)",
+                (row_id, kind, title, json.dumps(payload), mission_id, now, now),
+            )
+            self._conn.commit()
+        stored = self.get_proposal(row_id)
+        assert stored is not None
+        return stored
+
+    def get_proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM proposals WHERE id = ?", (proposal_id,)
+            ).fetchone()
+        return self._proposal(row) if row else None
+
+    def list_proposals(self, limit: int = 40) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM proposals ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [self._proposal(row) for row in rows]
+
+    def update_proposal(
+        self,
+        proposal_id: str,
+        *,
+        status: str,
+        detail: str = "",
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE proposals SET status = ?, detail = ?, updated_at = ? "
+                "WHERE id = ?",
+                (status, detail, _now(), proposal_id),
+            )
+            self._conn.commit()
+        return self.get_proposal(proposal_id)
+
+    @staticmethod
+    def _proposal(row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        data["payload"] = json.loads(data.pop("payload_json") or "{}")
+        return data
 
     def _media_rows(self, deliverable_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(

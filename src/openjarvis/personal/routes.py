@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from openjarvis.personal.google_desk import resolve_google_desk_path
 from openjarvis.personal.office import PersonalOffice
+from openjarvis.personal.phone import resolve_phone_gate, start_phone
 from openjarvis.personal.specialists import get_specialist
+
+logger = logging.getLogger(__name__)
 
 personal_router = APIRouter(prefix="/v1/personal", tags=["personal"])
 
@@ -66,6 +71,17 @@ class AskRequest(BaseModel):
     question: str = Field(..., min_length=1)
 
 
+class DrivePullRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+
+
+def _first(*values: object) -> str:
+    for value in values:
+        if value and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
 def _office_from_app(request: Request) -> PersonalOffice:
     """Return the process-wide office, creating it from server config once."""
     existing = getattr(request.app.state, "personal_office", None)
@@ -114,6 +130,35 @@ def _office_from_app(request: Request) -> PersonalOffice:
             omniroute_models = {
                 str(key): str(value) for key, value in raw_models.items()
             }
+    channel = getattr(config, "channel", None) if config is not None else None
+    telegram_cfg = getattr(channel, "telegram", None)
+    slack_cfg = getattr(channel, "slack", None)
+    google_path = resolve_google_desk_path(
+        db_path,
+        _first(getattr(personal, "google_credentials_path", "") if personal else ""),
+    )
+    phone = resolve_phone_gate(
+        _first(
+            getattr(personal, "telegram_chat_id", "") if personal else "",
+            getattr(telegram_cfg, "allowed_chat_ids", ""),
+        ),
+        _first(
+            getattr(personal, "slack_user_id", "") if personal else "",
+            getattr(slack_cfg, "allowed_user_ids", ""),
+        ),
+    )
+    telegram_token = _first(
+        os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+        getattr(telegram_cfg, "bot_token", ""),
+    )
+    slack_bot = _first(
+        os.environ.get("SLACK_BOT_TOKEN", ""),
+        getattr(slack_cfg, "bot_token", ""),
+    )
+    slack_app = _first(
+        os.environ.get("SLACK_APP_TOKEN", ""),
+        getattr(slack_cfg, "app_token", ""),
+    )
     office = PersonalOffice(
         db_path,
         engine=getattr(request.app.state, "engine", None),
@@ -133,8 +178,19 @@ def _office_from_app(request: Request) -> PersonalOffice:
         omniroute_api_key=omniroute_api_key,
         omniroute_model=omniroute_model,
         omniroute_models=omniroute_models,
+        google_credentials_path=google_path,
+        phone=phone,
     )
     request.app.state.personal_office = office
+    try:
+        start_phone(
+            office,
+            telegram_token=telegram_token,
+            slack_bot_token=slack_bot,
+            slack_app_token=slack_app,
+        )
+    except Exception:
+        logger.exception("Phone bridge did not start")
     return office
 
 
@@ -339,3 +395,44 @@ def personal_delete_project(project_id: str, request: Request) -> dict[str, Any]
     if not deleted:
         raise HTTPException(status_code=404, detail="Project not found")
     return {"deleted": True}
+
+
+@personal_router.get("/briefing")
+def personal_briefing(request: Request) -> dict[str, Any]:
+    """Inbox and upcoming meetings. Empty when Google is not connected."""
+    return _office_from_app(request).briefing()
+
+
+@personal_router.get("/proposals")
+def personal_proposals(request: Request) -> dict[str, Any]:
+    office = _office_from_app(request)
+    return {"proposals": office.store.list_proposals()}
+
+
+@personal_router.post("/proposals/{proposal_id}/approve")
+def personal_approve_proposal(proposal_id: str, request: Request) -> dict[str, Any]:
+    """Jonathan's approval. This is the only route that may send or schedule."""
+    office = _office_from_app(request)
+    try:
+        return office.approve_proposal(proposal_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Proposal not found") from exc
+
+
+@personal_router.post("/proposals/{proposal_id}/reject")
+def personal_reject_proposal(proposal_id: str, request: Request) -> dict[str, Any]:
+    office = _office_from_app(request)
+    try:
+        return office.reject_proposal(proposal_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Proposal not found") from exc
+
+
+@personal_router.post("/drive/pull")
+def personal_drive_pull(body: DrivePullRequest, request: Request) -> dict[str, Any]:
+    return _office_from_app(request).pull_drive(body.query)
+
+
+@personal_router.get("/phone")
+def personal_phone(request: Request) -> dict[str, Any]:
+    return _office_from_app(request).phone_status()

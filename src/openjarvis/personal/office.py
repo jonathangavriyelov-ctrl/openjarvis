@@ -14,6 +14,7 @@ from openjarvis.personal.goals import (
     default_milestones,
     pace_label,
 )
+from openjarvis.personal.google_desk import GoogleDesk, drafts_for
 from openjarvis.personal.hermes import (
     resolve_configured_model,
     resolve_executive_model,
@@ -21,6 +22,7 @@ from openjarvis.personal.hermes import (
 from openjarvis.personal.higgsfield import HiggsfieldClient, resolve_credentials
 from openjarvis.personal.memory_bridge import MemoryBridge
 from openjarvis.personal.omniroute import OmniRouteClient, resolve_omniroute
+from openjarvis.personal.phone import PhoneGate, describe_phone
 from openjarvis.personal.planner import plan_from_model_text, plan_request
 from openjarvis.personal.specialists import (
     ProduceContext,
@@ -60,6 +62,7 @@ def _visual_section(assets: list[dict[str, Any]]) -> str:
             note = asset.get("detail") or asset.get("status") or "No picture yet."
             lines.append(f"- {note}")
     return "\n".join(lines)
+
 
 _PLAN_INSTRUCTION = (
     "Split the request into tasks. Reply with JSON only, no markdown:\n"
@@ -125,6 +128,10 @@ class PersonalOffice:
         omniroute_model: str = "auto",
         omniroute_models: dict[str, str] | None = None,
         omniroute: OmniRouteClient | None = None,
+        google: GoogleDesk | None = None,
+        google_credentials_path: str = "",
+        discover_google: bool = False,
+        phone: PhoneGate | None = None,
     ) -> None:
         self.store = PersonalStore(db_path)
         self.store.ensure_example_projects()
@@ -157,6 +164,23 @@ class PersonalOffice:
                 default_model=model,
                 agent_models=omniroute_models,
             )
+        if google is not None:
+            self.google = google
+        else:
+            path = google_credentials_path or ""
+            if discover_google and not path:
+                from openjarvis.personal.google_desk import resolve_google_desk_path
+
+                path = resolve_google_desk_path(str(db_path), google_credentials_path)
+            self.google = GoogleDesk(path)
+        self.phone = phone if phone is not None else PhoneGate()
+        self._telegram_token = ""
+        self._slack_token = ""
+        self._slack_app_token = ""
+        self._phone_started = False
+        self._phone_listening = {"telegram": False, "slack": False}
+        self._phone_notes: dict[str, str] = {"telegram": "", "slack": ""}
+        self._phone_channels: dict[str, Any] = {}
         self._turn: dict[str, Any] = {"eli5": False, "command": None}
         self._calls = threading.local()
         self._run_lock = threading.Lock()
@@ -164,6 +188,13 @@ class PersonalOffice:
         self._threads: dict[str, threading.Thread] = {}
 
     def close(self) -> None:
+        for channel in self._phone_channels.values():
+            disconnect = getattr(channel, "disconnect", None)
+            if disconnect is not None:
+                try:
+                    disconnect()
+                except Exception:
+                    logger.debug("Phone channel disconnect failed", exc_info=True)
         self.store.close()
 
     # -- model selection -----------------------------------------------------
@@ -515,7 +546,11 @@ class PersonalOffice:
             "agents": agents,
         }
         command = find_command(request, self._loaded_commands())
-        self._turn = {"eli5": self.eli5_enabled(), "command": command}
+        self._turn = {
+            "eli5": self.eli5_enabled(),
+            "command": command,
+            "google": self._google_snapshot(request),
+        }
         planned = None
         planner_source = "offline"
         if command is not None:
@@ -626,6 +661,7 @@ class PersonalOffice:
                 "idle",
                 "Delegation did not finish",
             )
+        self._file_proposals(request, mission_id)
         self.store.update_mission(
             mission_id,
             status=status,
@@ -673,10 +709,21 @@ class PersonalOffice:
         a2a.state = TaskState.WORKING
         self.store.update_task(task["id"], status="working", a2a=a2a.to_dict())
         hits = self._recall(request)
+        snap = self._turn.get("google") or {}
+        briefing = ""
+        if spec.id == "executive_assistant":
+            briefing = self.google.briefing_text(snap)
+        if spec.id == "second_brain":
+            saved = self._save_drive_docs(snap.get("files") or [])
+            for note in saved:
+                hits.insert(0, note["body"])
         memory_block = ""
         if hits:
             memory_block = "\n\nRelated memory:\n" + "\n".join(hits)
-        model_text = self._generate(choice, spec.id, task["brief"] + memory_block)
+        prompt = task["brief"] + memory_block
+        if briefing:
+            prompt = f"{prompt}\n\n{briefing}"
+        model_text = self._generate(choice, spec.id, prompt)
         used = getattr(self._calls, "used", None) or choice
         source = used.source if model_text else "offline"
         model_id = used.model_id if model_text else ""
@@ -691,6 +738,7 @@ class PersonalOffice:
                 goals=self.store.list_goals(),
                 eli5=bool(self._turn.get("eli5")),
                 persona_note=getattr(command, "instructions", "") or "",
+                google_briefing=briefing,
             ),
         )
         project_id = task.get("project_id") or ""
@@ -708,6 +756,8 @@ class PersonalOffice:
                 tags=produced.note.get("tags") or "",
             )
         body = produced.body
+        if briefing and model_text:
+            body = f"{body.rstrip()}\n\n{briefing}"
         assets: list[dict[str, Any]] = []
         if produced.visual_prompt:
             assets = self.higgsfield.illustrate(
@@ -803,6 +853,8 @@ class PersonalOffice:
             "eli5": self.eli5_enabled(),
             "higgsfield": self.higgsfield.public_status(),
             "omniroute": self.omniroute.public_status(),
+            "google": self.google.public_status(),
+            "phone": self.phone_status(),
             "commands": [
                 item.to_dict() for item in list_commands(self._loaded_commands())
             ],
@@ -819,6 +871,114 @@ class PersonalOffice:
         ]
         return row
 
+    def phone_status(self) -> dict[str, Any]:
+        return describe_phone(
+            self.phone,
+            telegram_token_set=bool(self._telegram_token),
+            slack_token_set=bool(self._slack_token),
+            telegram_listening=bool(self._phone_listening.get("telegram")),
+            slack_listening=bool(self._phone_listening.get("slack")),
+            notes=self._phone_notes,
+        )
+
+    def briefing(self) -> dict[str, Any]:
+        snap = self.google.snapshot("")
+        return {
+            "connected": bool(snap.get("connected")),
+            "inbox": snap.get("inbox") or [],
+            "meetings": snap.get("meetings") or [],
+            "text": self.google.briefing_text(snap),
+            "google": self.google.public_status(),
+        }
+
+    def pull_drive(self, query: str) -> dict[str, Any]:
+        snap = self.google.snapshot(query)
+        notes = self._save_drive_docs(snap.get("files") or [])
+        files = [
+            {"name": item.get("name") or "", "link": item.get("link") or ""}
+            for item in (snap.get("files") or [])
+        ]
+        return {
+            "connected": bool(snap.get("connected")),
+            "files": files,
+            "notes": notes,
+        }
+
+    def approve_proposal(self, proposal_id: str) -> dict[str, Any]:
+        """The only path that may send mail or create a calendar event."""
+        row = self.store.get_proposal(proposal_id)
+        if row is None:
+            raise KeyError(proposal_id)
+        if row["status"] != "pending":
+            return row
+        from openjarvis.personal import google_actions
+
+        try:
+            detail = google_actions.fulfill(
+                row["kind"],
+                row["payload"],
+                self.google.credentials_path,
+            )
+        except PermissionError as exc:
+            detail = str(exc)
+        except Exception as exc:
+            logger.exception("Proposal %s was not sent", proposal_id)
+            updated = self.store.update_proposal(
+                proposal_id,
+                status="pending",
+                detail=f"Not sent: {exc}"[:300],
+            )
+            assert updated is not None
+            return updated
+        updated = self.store.update_proposal(
+            proposal_id, status="approved", detail=detail
+        )
+        assert updated is not None
+        return updated
+
+    def reject_proposal(self, proposal_id: str) -> dict[str, Any]:
+        row = self.store.get_proposal(proposal_id)
+        if row is None:
+            raise KeyError(proposal_id)
+        if row["status"] != "pending":
+            return row
+        updated = self.store.update_proposal(
+            proposal_id,
+            status="rejected",
+            detail="Rejected. Nothing was sent or added to the calendar.",
+        )
+        assert updated is not None
+        return updated
+
+    def _google_snapshot(self, request: str) -> dict[str, Any]:
+        try:
+            return self.google.snapshot(request)
+        except Exception:
+            logger.debug("Google snapshot failed", exc_info=True)
+            return {"connected": False, "inbox": [], "meetings": [], "files": []}
+
+    def _file_proposals(self, request: str, mission_id: str) -> None:
+        for draft in drafts_for(request):
+            self.store.add_proposal(
+                kind=draft["kind"],
+                title=draft["title"],
+                payload=draft["payload"],
+                mission_id=mission_id,
+            )
+
+    def _save_drive_docs(self, docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        existing = {note["title"] for note in self.store.list_notes(limit=200)}
+        saved = []
+        for doc in docs[:3]:
+            name = (doc.get("name") or "Untitled").strip()
+            title = f"Drive: {name}"
+            body = (doc.get("text") or "").strip()
+            if not body or title in existing:
+                continue
+            saved.append(self.capture_note(title, body, tags="drive,second-brain"))
+            existing.add(title)
+        return saved
+
     def eli5_enabled(self) -> bool:
         return self.store.get_setting("eli5", "0") == "1"
 
@@ -831,6 +991,8 @@ class PersonalOffice:
             "eli5": self.eli5_enabled(),
             "higgsfield": self.higgsfield.public_status(),
             "omniroute": self.omniroute.public_status(),
+            "google": self.google.public_status(),
+            "phone": self.phone_status(),
             "commands": [
                 item.to_dict() for item in list_commands(self._loaded_commands())
             ],
@@ -844,8 +1006,10 @@ class PersonalOffice:
         found: dict[str, Any] | None = None
         for project in self.store.list_projects():
             name = project["name"].strip().lower()
-            if name and name in lowered and (
-                found is None or len(name) > len(found["name"])
+            if (
+                name
+                and name in lowered
+                and (found is None or len(name) > len(found["name"]))
             ):
                 found = project
         return found

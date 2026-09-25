@@ -148,10 +148,57 @@ export interface DeskCommand {
   source: string;
 }
 
+export interface GoogleStatus {
+  connected: boolean;
+  gmail: boolean;
+  calendar: boolean;
+  drive: boolean;
+  detail: string;
+}
+
+export interface PhoneChannelStatus {
+  ready: boolean;
+  restricted: boolean;
+  listening: boolean;
+  detail: string;
+}
+
+export interface PhoneStatus {
+  telegram: PhoneChannelStatus;
+  slack: PhoneChannelStatus;
+}
+
+export interface Briefing {
+  connected: boolean;
+  inbox: { from: string; subject: string; snippet: string }[];
+  meetings: { title: string; when: string }[];
+  text: string;
+  google: GoogleStatus;
+}
+
+export interface Proposal {
+  id: string;
+  kind: string;
+  title: string;
+  payload: {
+    to?: string;
+    subject?: string;
+    body?: string;
+    summary?: string;
+    description?: string;
+  };
+  status: string;
+  detail: string;
+  mission_id: string;
+  created_at: string;
+}
+
 export interface DeskSettings {
   eli5: boolean;
   higgsfield: { configured: boolean; image_model: string; video_model: string };
   commands: DeskCommand[];
+  google?: GoogleStatus;
+  phone?: PhoneStatus;
 }
 
 export interface Note {
@@ -174,6 +221,8 @@ export interface WorldSnapshot {
   eli5?: boolean;
   higgsfield?: DeskSettings['higgsfield'];
   omniroute?: OmniRouteStatus;
+  google?: GoogleStatus;
+  phone?: PhoneStatus;
   commands?: DeskCommand[];
 }
 
@@ -291,6 +340,24 @@ export const askBrain = (question: string) =>
     method: 'POST',
     body: JSON.stringify({ question }),
   });
+
+export const fetchBriefing = () => read<Briefing>('/v1/personal/briefing');
+
+export const fetchProposals = () => read<{ proposals: Proposal[] }>('/v1/personal/proposals');
+
+export const approveProposal = (id: string) =>
+  read<Proposal>(`/v1/personal/proposals/${id}/approve`, { method: 'POST' });
+
+export const rejectProposal = (id: string) =>
+  read<Proposal>(`/v1/personal/proposals/${id}/reject`, { method: 'POST' });
+
+export const fetchPhone = () => read<PhoneStatus>('/v1/personal/phone');
+
+export const pullDrive = (query: string) =>
+  read<{ connected: boolean; files: { name: string; link: string }[]; notes: Note[] }>(
+    '/v1/personal/drive/pull',
+    { method: 'POST', body: JSON.stringify({ query }) },
+  );
 
 export function routeLabel(model: ModelChoice | null | undefined): string {
   if (!model || model.source === 'offline' || !model.model_id) return 'Local notes';
