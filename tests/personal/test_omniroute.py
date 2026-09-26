@@ -53,7 +53,7 @@ def test_enabled_without_a_url_uses_the_local_default():
     assert model == "auto"
 
 
-def test_hermes_and_per_agent_models_go_through_omniroute(tmp_path):
+def test_chief_uses_omniroute_and_the_assistant_stays_local(tmp_path):
     calls = []
 
     def http(method, url, payload, header):
@@ -78,10 +78,13 @@ def test_hermes_and_per_agent_models_go_through_omniroute(tmp_path):
     )
     check = office.run_mission("/sc:pm what is next")
     assistant = check["deliverables"][0]
-    assert assistant["model_source"] == "omniroute"
+    assert assistant["model_source"] == "hermes"
     assert assistant["model_id"] == "hermes3"
-    assert "via hermes3" in assistant["body"]
-    assert engine.calls == []
+    assert "from the engine" in assistant["body"]
+    assert engine.calls == ["hermes3"]
+    chief = office.model_choices()["agents"]["chief_of_staff"]
+    assert chief["route"] == "omniroute"
+    assert chief["model_id"] == "gpt-4o"
 
     draft = office.run_mission("Draft a launch post")
     marketing = next(
@@ -114,9 +117,11 @@ def test_missing_hermes_uses_auto_on_omniroute(tmp_path):
         omniroute=_client(http),
     )
     choice = office.model_choices()["agents"]["executive_assistant"]
-    assert choice["route"] == "omniroute"
-    assert choice["model_id"] == "auto"
-    assert "not in the OmniRoute catalog" in choice["detail"]
+    assert choice["route"] == "engine"
+    assert choice["model_id"] == "other"
+    chief = office.model_choices()["agents"]["chief_of_staff"]
+    assert chief["route"] == "omniroute"
+    assert chief["model_id"] == "gpt-4o"
     office.close()
 
 

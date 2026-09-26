@@ -16,6 +16,8 @@ from openjarvis.personal.goals import (
 )
 from openjarvis.personal.google_desk import GoogleDesk, ScopedGoogle, drafts_for
 from openjarvis.personal.hermes import (
+    DEFAULT_HERMES_MODEL,
+    DEFAULT_LOCAL_MODEL,
     resolve_configured_model,
     resolve_executive_model,
 )
@@ -118,7 +120,7 @@ class PersonalOffice:
         memory: Any = None,
         scheduler: Any = None,
         bus: Any = None,
-        hermes_model: str = "hermes3",
+        hermes_model: str = DEFAULT_HERMES_MODEL,
         fallback_model: str = "",
         default_model: str = "",
         schedule_checkins: bool = True,
@@ -146,7 +148,7 @@ class PersonalOffice:
         self.memory = MemoryBridge(memory)
         self.scheduler = scheduler
         self.bus = bus
-        self.hermes_model = hermes_model or "hermes3"
+        self.hermes_model = hermes_model or DEFAULT_HERMES_MODEL
         self.fallback_model = fallback_model or ""
         self.default_model = default_model or ""
         self.schedule_checkins = schedule_checkins
@@ -246,7 +248,7 @@ class PersonalOffice:
         return [str(name) for name in listed if name], True
 
     def _fallback_id(self) -> str:
-        return self.fallback_model or self.default_model
+        return self.fallback_model or self.default_model or DEFAULT_LOCAL_MODEL
 
     def model_choices(self) -> dict[str, Any]:
         available, engine_ok = self._probe_engine()
@@ -294,7 +296,13 @@ class PersonalOffice:
         configured: Any,
         world_id: str = "",
     ) -> dict[str, Any]:
-        """One model choice per agent, OmniRoute first when it is reachable."""
+        """Pick each agent's model.
+
+        The Executive Assistant stays on the local engine (Ollama
+        ``hermes3:8b`` when it is installed) unless that world's team row
+        names an OmniRoute model. The Chief of Staff, and the other
+        specialists, use OmniRoute when that gateway is reachable.
+        """
         settings = self.roi.settings()
         self.omniroute.strong_model = settings["strong_model"]
         self.omniroute.cheap_model = settings["cheap_model"]
@@ -308,7 +316,8 @@ class PersonalOffice:
         for spec in list_specialists():
             engine_choice = executive if spec.prefers_hermes else configured
             override = (team.get(spec.id) or {}).get("omniroute_model") or ""
-            if status.get("reachable"):
+            local_assistant = spec.id == "executive_assistant" and not override
+            if status.get("reachable") and not local_assistant:
                 choices[spec.id] = self.omniroute.choice_for(
                     spec.id,
                     hermes_model=self.hermes_model,

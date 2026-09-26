@@ -1764,16 +1764,18 @@ class DigestConfig:
 class PersonalConfig:
     """Personal AI OS — chief of staff, specialists, and goals.
 
-    ``hermes_model`` is a Nous Research Hermes model id served by the
-    configured engine (Ollama or any OpenAI-compatible server). The
-    Executive Assistant uses it when the engine lists that model, and
-    otherwise falls back to ``fallback_model`` or the server default.
+    ``hermes_model`` is a Nous Research Hermes model id served by Ollama.
+    The Executive Assistant uses ``hermes3:8b`` when that tag is installed,
+    and otherwise ``fallback_model`` (``qwen3.5:4b``) or any other local
+    model. The Chief of Staff uses OmniRoute when that gateway is
+    configured, and the local engine when it is not. No API key is required
+    for the local path.
     """
 
     enabled: bool = True
     db_path: str = ""
-    hermes_model: str = "hermes3"
-    fallback_model: str = ""
+    hermes_model: str = "hermes3:8b"
+    fallback_model: str = "qwen3.5:4b"
     schedule_checkins: bool = True
     # ``key_id:key_secret``. Prefer the HF_KEY env var. Never commit a real key.
     higgsfield_key: str = ""

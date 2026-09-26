@@ -5,21 +5,23 @@ already runs them anywhere it runs Ollama or an OpenAI-compatible server
 (Ollama's ``/v1`` endpoint, llama.cpp, vLLM). This module only chooses which
 model id the Executive Assistant should call.
 
-Common ids that those engines accept when the weights are installed:
+The default on a laptop is Ollama's ``hermes3:8b``. If that tag is not
+installed, the resolver uses another listed Hermes model, then a local
+fallback such as ``qwen3.5:4b``, then whatever else the engine lists.
 
-* ``hermes3``, ``hermes3:8b``, ``hermes3:70b`` (Ollama library, Hermes 3)
-* ``nous-hermes2`` and other tags whose name contains ``hermes``
-
-The configured Hermes id wins when the engine actually lists it. A configured
-Hermes 4 id is rewritten to Hermes 3, because Hermes 4 is not used for
-tool-calling loops. Otherwise the resolver picks another listed Hermes model,
-then the configured fallback model, then the offline structured producer.
+A configured Hermes 4 id is rewritten to Hermes 3, because Hermes 4 is not
+used for tool-calling loops. When no model is reachable, the Executive
+Assistant uses its offline structured producer.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Sequence
+
+# Sized for a 16 GB Apple Silicon Mac running Ollama.
+DEFAULT_HERMES_MODEL = "hermes3:8b"
+DEFAULT_LOCAL_MODEL = "qwen3.5:4b"
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,10 +81,10 @@ def resolve_executive_model(
     Parameters
     ----------
     configured_hermes:
-        Preferred Hermes model id (default ``hermes3``).
+        Preferred Hermes model id (default ``hermes3:8b``).
     fallback:
         Model id to use when no Hermes weights are on the engine. Empty means
-        "whatever the server was started with", passed in by the caller.
+        prefer ``qwen3.5:4b``, then any other listed model.
     available:
         Model ids reported by ``engine.list_models()``. ``None`` means the
         engine could not be asked.
@@ -145,22 +147,30 @@ def resolve_executive_model(
             )
         return ModelChoice(chosen, "hermes", detail)
 
-    fallback_id = (fallback or "").strip()
+    fallback_id = (fallback or "").strip() or DEFAULT_LOCAL_MODEL
     if fallback_id:
         for name in names:
-            if _matches(name, fallback_id):
+            if _matches(name, fallback_id) and not _is_hermes4(name):
                 return ModelChoice(
                     name,
                     "fallback",
                     "Hermes is not installed on this engine. Using the "
-                    f"configured model {name}.",
+                    f"local model {name}.",
                 )
         if not names:
             return ModelChoice(
                 fallback_id,
                 "fallback",
-                "The engine did not list models. Trying the configured "
+                "The engine did not list models. Trying the local "
                 f"model {fallback_id}.",
+            )
+    for name in names:
+        if not _is_hermes4(name):
+            return ModelChoice(
+                name,
+                "fallback",
+                "Hermes is not installed. Using the local model "
+                f"{name} already on the engine.",
             )
 
     if names:

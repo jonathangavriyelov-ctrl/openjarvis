@@ -137,6 +137,34 @@ def test_model_plan_overrides_keywords_when_it_names_real_specialists():
     assert plan_from_model_text("not json", request="Draft a post") is None
 
 
+def test_executive_assistant_prefers_hermes3_8b_then_any_local_model():
+    exact = resolve_executive_model(
+        "hermes3:8b",
+        "qwen3.5:4b",
+        ["qwen3.5:4b", "hermes3:8b"],
+        True,
+    )
+    assert exact.source == "hermes"
+    assert exact.model_id == "hermes3:8b"
+
+    qwen = resolve_executive_model(
+        "hermes3:8b",
+        "qwen3.5:4b",
+        ["llama3", "qwen3.5:4b"],
+        True,
+    )
+    assert qwen.source == "fallback"
+    assert qwen.model_id == "qwen3.5:4b"
+
+    other = resolve_executive_model(
+        "hermes3:8b",
+        "",
+        ["llama3"],
+        True,
+    )
+    assert other.model_id == "llama3"
+
+
 def test_hermes_resolution_prefers_installed_hermes_then_falls_back():
     exact = resolve_executive_model(
         "hermes3",

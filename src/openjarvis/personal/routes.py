@@ -125,11 +125,11 @@ def _office_from_app(request: Request) -> PersonalOffice:
     personal = getattr(config, "personal", None) if config is not None else None
     db_path = os.environ.get("OPENJARVIS_PERSONAL_DB", "")
     hermes_model = os.environ.get("OPENJARVIS_HERMES_MODEL", "")
-    fallback = ""
+    fallback = os.environ.get("OPENJARVIS_FALLBACK_MODEL", "")
     if personal is not None:
         db_path = db_path or getattr(personal, "db_path", "") or ""
         hermes_model = hermes_model or getattr(personal, "hermes_model", "") or ""
-        fallback = getattr(personal, "fallback_model", "") or ""
+        fallback = fallback or getattr(personal, "fallback_model", "") or ""
     if not db_path:
         from openjarvis.core.paths import get_config_dir
 
@@ -198,8 +198,8 @@ def _office_from_app(request: Request) -> PersonalOffice:
         memory=getattr(request.app.state, "memory_backend", None),
         scheduler=getattr(request.app.state, "task_scheduler", None),
         bus=getattr(request.app.state, "bus", None),
-        hermes_model=hermes_model or "hermes3",
-        fallback_model=fallback,
+        hermes_model=hermes_model or "hermes3:8b",
+        fallback_model=fallback or "qwen3.5:4b",
         default_model=default_model or fallback,
         schedule_checkins=schedule_checkins,
         higgsfield_key=higgsfield_key,
