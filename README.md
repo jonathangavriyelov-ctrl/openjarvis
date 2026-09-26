@@ -64,6 +64,10 @@ Open the URL it prints, usually [http://127.0.0.1:5173/os/world](http://127.0.0.
 
 The first launch asks you to create a password before any world, page, or saved data is shown. The desk stores a scrypt hash in `~/.openjarvis/os_password.json` and never the password itself. A successful sign-in sets an httpOnly cookie that lasts 7 days. **Lock** ends that session. Five wrong passwords lock the sign-in for 15 minutes. `GET /health` stays open. `/v1/personal/*` and the other data routes reject requests that have neither the session cookie nor `OPENJARVIS_API_KEY`. The phone bot and in-process agents do not use this cookie.
 
+Cloud models use `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `XAI_API_KEY` from the environment. The desk does not write those keys to disk and does not display them. Settings shows Connected or Not connected, with a Test button. Routing defaults keep the Executive Assistant on `hermes3:8b` (then `qwen3.5:4b`), and use Claude, Grok, or GPT only when that key is set. `@claude`, `@grok`, `@gpt`, and `@local` in a message win. `make os` does not contact NVIDIA NIM unless `[engine] disabled` is set without `nim`.
+
+Cloud models use `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `XAI_API_KEY` from the environment. The desk does not write those keys to disk and does not display them. Settings shows Connected or Not connected, with a Test button. Routing defaults keep the Executive Assistant on `hermes3:8b` (then `qwen3.5:4b`), and use Claude, Grok, or GPT only when that key is set. `@claude`, `@grok`, `@gpt`, and `@local` in a message win. `make os` does not contact NVIDIA NIM unless `[engine] disabled` is set without `nim`.
+
 ```bash
 jarvis os reset-password
 ```

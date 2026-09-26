@@ -295,7 +295,10 @@ export function ChiefPage() {
                   <article key={task.id} className="board-card">
                     <strong>{task.title}</strong>
                     <p className="muted">{visibleBrief(task.brief)}</p>
-                    <span>{task.status === 'failed' ? 'Stopped' : statusLabel(task.status)}</span>
+                    <span>
+                      {task.status === 'failed' ? 'Stopped' : statusLabel(task.status)}
+                      {task.model_id ? ` · ${task.model_id}` : ''}
+                    </span>
                   </article>
                 ))}
                 {tasks.filter((task) => columnFor(task.status) === column.id).length === 0 && (

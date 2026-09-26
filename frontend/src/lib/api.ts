@@ -27,6 +27,38 @@ export async function getCloudKeyStatus(): Promise<CloudKeyStatus> {
   }
 }
 
+export interface CloudProviderState {
+  id: string;
+  name: string;
+  connected: boolean;
+}
+
+export async function fetchCloudProviders(): Promise<CloudProviderState[]> {
+  const response = await apiFetch('/v1/personal/providers');
+  if (!response.ok) throw new Error('Providers could not be read.');
+  const body = await response.json();
+  return Array.isArray(body.providers) ? body.providers : [];
+}
+
+export async function testCloudProvider(
+  providerId: string,
+): Promise<{ ok: boolean; detail: string; model: string }> {
+  const response = await apiFetch(`/v1/personal/providers/${providerId}/test`, {
+    method: 'POST',
+  });
+  let body: { ok?: boolean; detail?: string; model?: string } = {};
+  try {
+    body = await response.json();
+  } catch {
+    body = {};
+  }
+  return {
+    ok: body.ok === true,
+    detail: typeof body.detail === 'string' ? body.detail : 'That did not work.',
+    model: typeof body.model === 'string' ? body.model : '',
+  };
+}
+
 export async function saveCloudKey(keyName: string, keyValue: string): Promise<void> {
   if (!isTauri()) {
     throw new Error('Cloud API keys can be saved in the desktop app only.');

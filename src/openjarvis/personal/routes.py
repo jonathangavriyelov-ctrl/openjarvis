@@ -182,6 +182,13 @@ def _office_from_app(request: Request) -> PersonalOffice:
             omniroute_models = {
                 str(key): str(value) for key, value in raw_models.items()
             }
+    specialist_models: dict[str, str] = {}
+    raw_specialists = getattr(personal, "models", None) if personal else None
+    if isinstance(raw_specialists, dict):
+        specialist_models = {
+            str(key): str(value) for key, value in raw_specialists.items()
+        }
+    routing = getattr(config, "routing", None) if config is not None else None
     channel = getattr(config, "channel", None) if config is not None else None
     telegram_cfg = getattr(channel, "telegram", None)
     slack_cfg = getattr(channel, "slack", None)
@@ -230,6 +237,8 @@ def _office_from_app(request: Request) -> PersonalOffice:
         omniroute_api_key=omniroute_api_key,
         omniroute_model=omniroute_model,
         omniroute_models=omniroute_models,
+        specialist_models=specialist_models,
+        routing=routing,
         google_credentials_path=google_path,
         phone=phone,
     )
@@ -517,6 +526,20 @@ def personal_ask(body: AskRequest, request: Request) -> dict[str, Any]:
     return _office_from_app(request).ask_memory(
         body.question, world_id=body.world_id or None
     )
+
+
+@personal_router.get("/providers")
+def personal_providers() -> dict[str, Any]:
+    from openjarvis.personal.providers import provider_status
+
+    return {"providers": provider_status()}
+
+
+@personal_router.post("/providers/{provider_id}/test")
+def personal_provider_test(provider_id: str) -> dict[str, Any]:
+    from openjarvis.personal.providers import probe_provider
+
+    return probe_provider(provider_id)
 
 
 @personal_router.get("/settings")

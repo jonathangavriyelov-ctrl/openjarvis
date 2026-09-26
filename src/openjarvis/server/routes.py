@@ -161,6 +161,18 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
     engine = request.app.state.engine
     agent = getattr(request.app.state, "agent", None)
     model = request_body.model
+    user_text = ""
+    for message in reversed(request_body.messages or []):
+        if message.role == "user" and message.content:
+            user_text = message.content
+            break
+    if user_text:
+        from openjarvis.routing import apply_mention
+
+        mentioned = apply_mention(model, user_text)
+        if mentioned and mentioned != model:
+            model = mentioned
+            request_body.model = mentioned
     use_server_agent = (
         agent is not None
         and not request_body.tools

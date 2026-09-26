@@ -137,6 +137,8 @@ class PersonalOffice:
         omniroute_api_key: str = "",
         omniroute_model: str = "auto",
         omniroute_models: dict[str, str] | None = None,
+        specialist_models: dict[str, str] | None = None,
+        routing: Any = None,
         omniroute: OmniRouteClient | None = None,
         google: GoogleDesk | None = None,
         google_credentials_path: str = "",
@@ -176,6 +178,12 @@ class PersonalOffice:
                 default_model=model,
                 agent_models=omniroute_models,
             )
+        self.specialist_models = {
+            str(key): str(value)
+            for key, value in (specialist_models or {}).items()
+            if str(key).strip() and str(value).strip()
+        }
+        self.routing = routing
         if google is not None:
             self.google = google
         else:
@@ -303,8 +311,10 @@ class PersonalOffice:
 
         The Executive Assistant stays on the local engine (Ollama
         ``hermes3:8b`` when it is installed) unless that world's team row
-        names an OmniRoute model. The Chief of Staff, and the other
-        specialists, use OmniRoute when that gateway is reachable.
+        or ``[personal.models]`` names a model. Those overrides go through
+        the normal engine even when OmniRoute is down. Other specialists
+        use OmniRoute when that gateway is reachable, and otherwise the
+        routing rules.
         """
         settings = self.roi.settings()
         self.omniroute.strong_model = settings["strong_model"]
@@ -319,17 +329,81 @@ class PersonalOffice:
         for spec in list_specialists():
             engine_choice = executive if spec.prefers_hermes else configured
             override = (team.get(spec.id) or {}).get("omniroute_model") or ""
-            local_assistant = spec.id == "executive_assistant" and not override
+            pinned = override or self.specialist_models.get(spec.id) or ""
+            if pinned:
+                choices[spec.id] = self._model_via_engine(spec, pinned, engine_choice)
+                continue
+            local_assistant = spec.id == "executive_assistant"
             if status.get("reachable") and not local_assistant:
                 choices[spec.id] = self.omniroute.choice_for(
                     spec.id,
                     hermes_model=self.hermes_model,
                     prefers_hermes=spec.prefers_hermes,
-                    model=override,
+                    model="",
                 )
+                continue
+            routed = self._routed_model(spec, "")
+            if routed is not None:
+                choices[spec.id] = routed
             else:
                 choices[spec.id] = engine_choice
         return choices
+
+    def _model_via_engine(self, spec: Any, model: str, fallback: Any) -> Any:
+        """Call ``model`` on the normal engine. A missing key stays local."""
+        from openjarvis.personal.hermes import ModelChoice
+        from openjarvis.routing import concrete_model, provider_of, provider_ready
+
+        chosen = concrete_model(model)
+        provider = provider_of(chosen)
+        if provider != "local" and not provider_ready(provider):
+            return fallback
+        if provider == "local":
+            available, engine_ok = self._probe_engine()
+            if spec.prefers_hermes or "hermes" in chosen.lower():
+                return resolve_executive_model(
+                    chosen, self._fallback_id(), available, engine_ok
+                )
+            return resolve_configured_model(chosen, available, engine_ok)
+        return ModelChoice(
+            chosen,
+            "cloud",
+            f"Using {chosen}.",
+            route="engine",
+        )
+
+    def _task_is_private(self, spec: Any) -> bool:
+        return spec.id == "executive_assistant" or spec.prefers_hermes
+
+    def _routed_model(self, spec: Any, text: str) -> Any | None:
+        from openjarvis.core.config import RoutingConfig
+        from openjarvis.routing import select_model
+
+        policy = self.routing or RoutingConfig()
+        tags = ["quick", "private"] if spec.prefers_hermes else []
+        if spec.id == "chief_of_staff":
+            tags.append("planning")
+        if spec.id == "marketing_content":
+            tags.append("writing")
+        decision = select_model(
+            policy,
+            agent=spec.id,
+            tags=tags,
+            text=text,
+            local_model=self.hermes_model or self._fallback_id(),
+            private=bool(policy.private_local_only and self._task_is_private(spec)),
+        )
+        if decision.source in {"default", "local", "private"} and not text:
+            available, engine_ok = self._probe_engine()
+            if spec.prefers_hermes:
+                return resolve_executive_model(
+                    decision.model, self._fallback_id(), available, engine_ok
+                )
+            return resolve_configured_model(
+                self._fallback_id(), available, engine_ok
+            )
+        engine_choice = self._engine_choice(spec.id)
+        return self._model_via_engine(spec, decision.model, engine_choice)
 
     def _engine_choice(self, specialist_id: str) -> Any:
         available, engine_ok = self._probe_engine()
@@ -351,6 +425,7 @@ class PersonalOffice:
         if world_note:
             extra = f"{extra}\n\nThis world:\n{world_note}".strip()
         world_id = str(self._turn.get("world_id") or "")
+        choice = self._apply_message_route(choice, spec, user_text)
         choice = self._fit_budget(choice, specialist_id, world_id, user_text)
         self._calls.used = choice
         messages = [
@@ -398,8 +473,20 @@ class PersonalOffice:
         except Exception:
             logger.debug("Model call failed for %s", specialist_id, exc_info=True)
             return None
+        usage: dict[str, Any] = {}
         if isinstance(result, dict):
             text = result.get("content") or ""
+            usage_value = result.get("usage")
+            raw_usage = usage_value if isinstance(usage_value, dict) else {}
+            cost = result.get("cost_usd")
+            usage = {
+                "input_tokens": raw_usage.get("prompt_tokens")
+                or raw_usage.get("input_tokens"),
+                "output_tokens": raw_usage.get("completion_tokens")
+                or raw_usage.get("output_tokens"),
+            }
+            if isinstance(cost, (int, float)) and cost > 0:
+                usage["reported_cost"] = float(cost)
         else:
             text = str(result or "")
         cleaned = text.strip()
@@ -410,9 +497,56 @@ class PersonalOffice:
                 choice.model_id,
                 user_text,
                 cleaned,
-                {},
+                usage,
             )
         return cleaned or None
+
+    def _apply_message_route(self, choice: Any, spec: Any, text: str) -> Any:
+        """@mentions and keyword rules can replace the specialist's model."""
+        from openjarvis.core.config import RoutingConfig
+        from openjarvis.personal.hermes import ModelChoice
+        from openjarvis.routing import (
+            engine_is_cloud,
+            mention_model,
+            message_has_keyword,
+            select_model,
+        )
+
+        policy = self.routing or RoutingConfig()
+        private = bool(policy.private_local_only and self._task_is_private(spec))
+        if private and (
+            engine_is_cloud(self.engine)
+            or mention_model(text)
+            or getattr(choice, "source", "") == "cloud"
+        ):
+            local = self._engine_choice(spec.id)
+            if engine_is_cloud(self.engine):
+                return ModelChoice(
+                    "",
+                    "offline",
+                    "This task stays on this machine, and the configured "
+                    "engine is a remote host.",
+                    route="offline",
+                )
+            return local
+        if not mention_model(text) and not message_has_keyword(policy, text):
+            return choice
+        tags = ["quick", "private"] if spec.prefers_hermes else []
+        if spec.id == "marketing_content":
+            tags.append("writing")
+        decision = select_model(
+            policy,
+            agent=spec.id,
+            tags=tags,
+            text=text,
+            local_model=self.hermes_model or self._fallback_id(),
+            private=private,
+        )
+        if decision.source == "mention" or (
+            decision.source == "rule" and decision.provider != "local"
+        ):
+            return self._model_via_engine(spec, decision.model, choice)
+        return choice
 
     def _fit_budget(self, choice: Any, specialist_id: str, world_id: str, prompt: str):
         from openjarvis.personal.hermes import ModelChoice
@@ -446,12 +580,20 @@ class PersonalOffice:
         if not world_id or world_id == OVERALL:
             world_id = ""
         reported = usage.get("reported_cost")
+        input_tokens = int(usage.get("input_tokens") or estimate_tokens(prompt))
+        output_tokens = int(usage.get("output_tokens") or estimate_tokens(text))
+        if reported is None:
+            from openjarvis.engine.cloud import estimate_cost
+
+            priced = estimate_cost(model, input_tokens, output_tokens)
+            if priced > 0:
+                reported = priced
         self.roi.record_llm(
             world_id=world_id,
             specialist_id=specialist_id,
             model=model,
-            input_tokens=int(usage.get("input_tokens") or estimate_tokens(prompt)),
-            output_tokens=int(usage.get("output_tokens") or estimate_tokens(text)),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             reported=reported if reported is not None else None,
         )
 
@@ -820,7 +962,9 @@ class PersonalOffice:
             spec_id,
             f"Question:\n{question.strip()}\n\nMemory:\n{context}",
         )
-        source = choice.source if answer else "offline"
+        used = getattr(self._calls, "used", None) or choice
+        source = used.source if answer else "offline"
+        choice = used
         if not answer:
             if hits:
                 preview = "\n\n".join(f"- {hit[:400]}" for hit in hits[:4])
@@ -894,6 +1038,13 @@ class PersonalOffice:
             for item in self.store.list_deliverables(limit=100)
             if item["mission_id"] == mission_id
         ]
+        by_task = {item.get("task_id"): item for item in mission["deliverables"]}
+        for task in mission["tasks"]:
+            item = by_task.get(task["id"])
+            if not item:
+                continue
+            task["model_id"] = item.get("model_id") or ""
+            task["model_source"] = item.get("model_source") or ""
         return mission
 
     def _execute(self, mission_id: str) -> None:

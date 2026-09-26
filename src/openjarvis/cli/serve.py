@@ -223,6 +223,7 @@ def serve(
     _has_cloud = (
         os.environ.get("OPENAI_API_KEY")
         or os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("XAI_API_KEY")
         or os.environ.get("GEMINI_API_KEY")
         or os.environ.get("GOOGLE_API_KEY")
         or os.environ.get("OPENROUTER_API_KEY")

@@ -79,6 +79,8 @@ export interface PersonalTask {
   brief: string;
   status: string;
   output: string;
+  model_id?: string;
+  model_source?: string;
   a2a?: { id?: string; state?: string; input?: string; output?: string };
 }
 

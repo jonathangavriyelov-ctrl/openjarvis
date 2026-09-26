@@ -30,6 +30,8 @@ CLOUD_PROVIDER_KEYS = {
     "minimax",
     "openai",
     "openrouter",
+    "xai",
+    "grok",
 }
 
 LOCAL_ENGINE_KEYS = {
@@ -62,6 +64,7 @@ API_KEY_ENV_VARS = {
     "GOOGLE_API_KEY": ("Google/Gemini cloud inference", {"google", "gemini"}),
     "MINIMAX_API_KEY": ("MiniMax cloud inference", {"minimax"}),
     "OPENAI_API_KEY": ("OpenAI cloud inference", {"openai", "gpt"}),
+    "XAI_API_KEY": ("xAI/Grok cloud inference", {"xai", "grok"}),
     "OPENROUTER_API_KEY": ("OpenRouter cloud inference", {"openrouter"}),
     "OPENWEATHERMAP_API_KEY": (
         "OpenWeatherMap weather lookup",

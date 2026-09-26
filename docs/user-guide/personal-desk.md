@@ -28,6 +28,42 @@ To replace a forgotten password and close every session:
 jarvis os reset-password
 ```
 
+## Models
+
+Keys stay in the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+`XAI_API_KEY`). The desk never writes them to a file and never shows the
+value. Settings lists each provider as Connected or Not connected, and Test
+sends a one-word prompt.
+
+`[routing]` chooses the model. An explicit model, or `@claude`, `@grok`,
+`@gpt`, or `@local` in the message, wins. A rule is used only when that
+provider's key is set; otherwise the task stays on a local model. With
+`private_local_only = true`, a private task (the Executive Assistant) never
+calls a cloud engine. An OpenAI-compatible engine pointed at a remote host
+counts as cloud.
+
+```toml
+[routing]
+default = "hermes3:8b"
+private_local_only = true
+
+[[routing.rules]]
+agent = "chief_of_staff"
+model = "claude-sonnet-4-6"
+fallback = "hermes3:8b"
+
+[personal.models]
+marketing_content = "gpt-4o"
+```
+
+`[personal.models]` and a world's model override go through the normal
+engine even when OmniRoute is not running. `[engine] disabled = ["nim"]`
+skips NVIDIA's keyless catalog. `make os` disables NIM unless that list
+is set in config.
+
+Each finished task shows the model that wrote it. Token cost is added to
+the month's ROI ledger.
+
 Install the dashboard with Node.js 22 LTS: Node 22.12 or newer, including
 22.20, and npm 10.9 or newer. npm 11 is fine. The desk does not need Node
 22.22 or npm 11.19. Some packages declare a newer Node floor; that

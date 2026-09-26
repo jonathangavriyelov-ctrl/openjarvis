@@ -492,6 +492,9 @@ class EngineConfig:
     afm: AfmEngineConfig = field(default_factory=AfmEngineConfig)
     gemma_cpp: GemmaCppEngineConfig = field(default_factory=GemmaCppEngineConfig)
     lemonade: LemonadeEngineConfig = field(default_factory=LemonadeEngineConfig)
+    # Engine ids to skip during discovery. ``nim`` is the keyless NVIDIA
+    # catalog probe. The personal desk adds it here unless config sets this.
+    disabled: List[str] = field(default_factory=list)
 
     # Backward-compat properties for old flat attribute names
     @property
@@ -1761,6 +1764,63 @@ class DigestConfig:
 
 
 @dataclass(slots=True)
+class RoutingRule:
+    """One model choice. Empty fields do not constrain the match."""
+
+    agent: str = ""
+    tag: str = ""
+    tags: List[str] = field(default_factory=list)
+    keywords: List[str] = field(default_factory=list)
+    model: str = ""
+    fallback: str = ""
+
+
+def suggested_routing_rules() -> List["RoutingRule"]:
+    """Desk defaults: local for private work, cloud when that key exists."""
+    return [
+        RoutingRule(
+            agent="executive_assistant",
+            tags=["quick", "private"],
+            model="hermes3:8b",
+            fallback="qwen3.5:4b",
+        ),
+        RoutingRule(
+            agent="chief_of_staff",
+            tags=["planning"],
+            model="claude-sonnet-4-6",
+            fallback="hermes3:8b",
+        ),
+        RoutingRule(
+            tags=["planning", "writing", "code"],
+            keywords=["plan", "write", "draft", "code", "implement"],
+            model="claude-sonnet-4-6",
+            fallback="hermes3:8b",
+        ),
+        RoutingRule(
+            tags=["realtime", "current"],
+            keywords=["current events", "latest news", "right now", "breaking"],
+            model="grok-3",
+            fallback="hermes3:8b",
+        ),
+        RoutingRule(
+            tags=["vision", "image", "json"],
+            keywords=["screenshot", "image", "photo", "json"],
+            model="gpt-4o",
+            fallback="hermes3:8b",
+        ),
+    ]
+
+
+@dataclass(slots=True)
+class RoutingConfig:
+    """Which model answers a task. An explicit model or an @mention wins."""
+
+    default: str = "hermes3:8b"
+    private_local_only: bool = True
+    rules: List[RoutingRule] = field(default_factory=suggested_routing_rules)
+
+
+@dataclass(slots=True)
 class PersonalConfig:
     """Personal AI OS — chief of staff, specialists, and goals.
 
@@ -1791,6 +1851,9 @@ class PersonalConfig:
     omniroute_api_key: str = ""
     omniroute_model: str = "auto"
     omniroute_models: dict[str, str] = field(default_factory=dict)
+    # Specialist id to model id. Used by the normal engine, with or without
+    # OmniRoute. A per-world team model still overrides this.
+    models: dict[str, str] = field(default_factory=dict)
     # Path to a Google OAuth token file. Prefer GOOGLE_CREDENTIALS_PATH,
     # or GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN.
     # Never commit those values.
@@ -1833,6 +1896,7 @@ class JarvisConfig:
     compression: CompressionConfig = field(default_factory=CompressionConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)
     personal: PersonalConfig = field(default_factory=PersonalConfig)
+    routing: RoutingConfig = field(default_factory=RoutingConfig)
     digest: DigestConfig = field(default_factory=DigestConfig)
     proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
     mining: Optional["MiningConfig"] = None
@@ -2113,6 +2177,7 @@ def load_config(path: Optional[Path] = None) -> JarvisConfig:
     else:
         config_path = get_config_path()
     cfg._config_dir = config_path.parent
+    data: Dict[str, Any] = {}
     if config_path.exists():
         with open(config_path, "rb") as fh:
             data = tomllib.load(fh)
@@ -2151,6 +2216,7 @@ def load_config(path: Optional[Path] = None) -> JarvisConfig:
             "compression",
             "skills",
             "personal",
+            "routing",
         )
         for section_name in top_sections:
             if section_name in data:
@@ -2184,6 +2250,12 @@ def load_config(path: Optional[Path] = None) -> JarvisConfig:
     # Apply profile even without a config file (in case defaults set one)
     if not config_path.exists() and cfg.security.profile:
         apply_security_profile(cfg.security, cfg.server)
+
+    # The personal desk does not contact NVIDIA NIM unless config opts in.
+    if os.environ.get("OPENJARVIS_PERSONAL_OS") == "1":
+        engine_data = data.get("engine") if isinstance(data.get("engine"), dict) else {}
+        if "disabled" not in engine_data and "nim" not in cfg.engine.disabled:
+            cfg.engine.disabled = [*cfg.engine.disabled, "nim"]
 
     return cfg
 
