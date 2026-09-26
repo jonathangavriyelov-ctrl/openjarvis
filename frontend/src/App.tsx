@@ -155,20 +155,11 @@ export default function App() {
     return () => clearInterval(interval);
   }, [gate, optInEnabled, optInDisplayName, optInAnonId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The personal desk never auto-opens the leaderboard prompt. Elsewhere,
-  // the first visit can still offer it. A settings toggle is the only way
-  // to open it from /os/*.
+  // The savings contest never opens on its own. Settings → Advanced is the only switch.
   useEffect(() => {
-    if (onPersonalDesk) {
-      setOptInModalOpen(false);
-      if (!optInModalSeen) markOptInModalSeen();
-      return;
-    }
-    if (!optInModalSeen) {
-      setOptInModalOpen(true);
-      markOptInModalSeen();
-    }
-  }, [onPersonalDesk]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!settings.leaderboardPrompt) setOptInModalOpen(false);
+    if (!optInModalSeen) markOptInModalSeen();
+  }, [onPersonalDesk, settings.leaderboardPrompt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fire model_changed when the user switches models. First mount is
   // not a "change" — only emit when both prev and current are real and
@@ -262,7 +253,7 @@ export default function App() {
       </Routes>
       <Toaster position="bottom-right" />
       {commandPaletteOpen && <CommandPalette />}
-      {optInModalOpen && !onPersonalDesk && (
+      {optInModalOpen && settings.leaderboardPrompt && (
         <OptInModal onClose={() => setOptInModalOpen(false)} />
       )}
     </>

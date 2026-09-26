@@ -10,6 +10,8 @@ const LINKS = [
   { to: '/os/brain', label: 'Second Brain', simple: 'Notes' },
   { to: '/os/feed', label: 'Knowledge', simple: 'Teaching' },
   { to: '/os/library', label: 'Deliverables', simple: 'Finished work' },
+  { to: '/dashboard#savings', label: 'View savings', simple: 'Money saved' },
+  { to: '/dashboard#energy', label: 'Check energy use', simple: 'Energy today' },
 ];
 
 let eli5Value = false;
@@ -118,12 +120,14 @@ export function OsShell({
   title,
   lede,
   action,
+  fit = false,
   children,
 }: {
   eyebrow: string;
   title: string;
   lede: string;
   action?: ReactNode;
+  fit?: boolean;
   children: ReactNode;
 }) {
   const eli5 = useEli5();
@@ -146,7 +150,7 @@ export function OsShell({
   };
 
   return (
-    <div className={eli5 ? 'os-page is-eli5' : 'os-page'}>
+    <div className={`${eli5 ? 'os-page is-eli5' : 'os-page'}${fit ? ' is-fit' : ''}`}>
       <div className="os-shell">
         <div className="os-nav-row">
           <OsNav />

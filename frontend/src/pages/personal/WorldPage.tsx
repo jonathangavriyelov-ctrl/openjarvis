@@ -16,6 +16,7 @@ import {
   type ProjectPlot,
   type WorldSnapshot,
 } from '../../lib/personal-api';
+import { HelpTip } from '../../components/HelpTip';
 import { OsError, OsShell, setDeskWorld, useDeskWorld, useEli5 } from './Shell';
 import './personal.css';
 
@@ -93,9 +94,25 @@ function PlanetMark({ mark }: { mark?: string }) {
   );
 }
 
-function planetSpot(index: number, count: number) {
-  const angle = -Math.PI / 2 + (index * 2 * Math.PI) / Math.max(count, 1);
-  return { x: 50 + Math.cos(angle) * 32, y: 48 + Math.sin(angle) * 30 };
+const BOARD_SPOTS = [
+  { column: 2, row: 1 },
+  { column: 1, row: 2 },
+  { column: 3, row: 2 },
+  { column: 1, row: 3 },
+  { column: 3, row: 3 },
+];
+
+function boardSpot(index: number) {
+  return BOARD_SPOTS[index] ?? {
+    column: (index % 3) + 1,
+    row: 4 + Math.floor((index - BOARD_SPOTS.length) / 3),
+  };
+}
+
+function openWorld(id: string, mail = false) {
+  if (mail) sessionStorage.setItem('openjarvis-focus-mail', '1');
+  else sessionStorage.removeItem('openjarvis-focus-mail');
+  setDeskWorld(id);
 }
 
 export function WorldPage() {
@@ -139,6 +156,12 @@ export function WorldPage() {
     };
   }, [deskWorld]);
 
+  useEffect(() => {
+    if (!deskWorld || sessionStorage.getItem('openjarvis-focus-mail') !== '1') return;
+    sessionStorage.removeItem('openjarvis-focus-mail');
+    document.getElementById('world-mail')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [deskWorld, world]);
+
   const projects = world?.projects ?? [];
   const agents = world?.agents ?? [];
 
@@ -181,79 +204,83 @@ export function WorldPage() {
 
   if (!deskWorld) {
     const planets = world?.worlds ?? [];
+    const cardHelp = eli5
+      ? 'Projects are things you make. Goals are what you hope to finish. Agents are helpers. Connect email lets this place use a mailbox.'
+      : 'Projects are the things you are building. Goals are what you want finished. Agents are the helpers on this world. Connect email links a mailbox so this world can draft mail for you.';
     return (
       <OsShell
+        fit
         eyebrow={eli5 ? 'YOUR PLACES' : 'WORLDS'}
         title={eli5 ? 'All your worlds' : 'Archipelago'}
-        lede={
-          eli5
-            ? 'Each planet is a life or a business. The helper in the middle can see all of them. Tap a planet to go inside.'
-            : 'Each planet is a world with its own mail, projects, and team. The chief in the center connects them. Open a planet to work inside it.'
-        }
+        lede={eli5 ? 'Each place is one part of your life.' : 'Each world is one part of your life or a business.'}
       >
         {error && <OsError message={error} />}
-        <section className="world archipelago" aria-label="Worlds">
-          <div className="world-sky" />
-          <svg className="world-flows" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-            {planets.map((planet, index) => {
-              const spot = planetSpot(index, planets.length);
-              return (
-                <line
-                  key={planet.id}
-                  x1={50}
-                  y1={48}
-                  x2={spot.x}
-                  y2={spot.y}
-                  className="world-flow is-done"
-                />
-              );
-            })}
-          </svg>
-          <button
-            type="button"
-            className={`organism is-chief is-${world?.chief?.status || 'idle'}`}
-            style={{ left: '50%', top: '48%' }}
-            onClick={() => navigate('/os/chief')}
-          >
-            <span className="organism-pulse" />
-            <strong>{eli5 ? 'The boss helper' : 'Chief of Staff'}</strong>
-            <em>{world?.chief?.current_work || (eli5 ? 'Watches every world' : 'Routes across worlds')}</em>
-          </button>
-          {planets.map((planet, index) => {
-            const spot = planetSpot(index, planets.length);
-            return (
-              <button
-                key={planet.id}
-                type="button"
-                className={`planet is-${planet.mark || 'advance'}`}
-                style={{ left: `${spot.x}%`, top: `${spot.y}%`, borderColor: planet.accent, color: planet.accent }}
-                onClick={() => setDeskWorld(planet.id)}
-              >
-                <PlanetMark mark={planet.mark} />
-                <strong>{planet.name}</strong>
-                <em>{tradeOf(planet)}</em>
-                <small>
-                  {planet.project_count} projects · {planet.goal_count} goals · {planet.agent_count} agents
-                  {(planet.knowledge_count ?? 0) > 0
-                    ? ` · ${planet.knowledge_count} ${planet.knowledge_count === 1 ? 'lesson' : 'lessons'}`
-                    : ''}
-                </small>
-                {planet.accounts.length === 0 && <span className="planet-mail">Connect email</span>}
-                {planet.roi && (
-                  <span className="planet-mail">
-                    {planet.roi.paying ? 'Paying for itself' : 'Not paying for itself'}
-                    {` · $${planet.roi.cost.toFixed(0)} cost · $${planet.roi.value.toFixed(0)} value`}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </section>
-        <section className="panel">
-          <div className="panel-head">
-            <h2>{eli5 ? 'Add a business' : 'New world'}</h2>
-          </div>
-          <form
+        <div className="archipelago-fit">
+          <section className="archipelago-map" aria-label="Worlds">
+            <p className="section-note">
+              {eli5
+                ? 'The helper in the middle can see every place.'
+                : 'The person in the middle can help across every world.'}
+            </p>
+            <div className="planet-board">
+              <div className="chief-node" style={{ gridColumn: 2, gridRow: 2 }}>
+                <strong>{eli5 ? 'The boss helper' : 'Chief of Staff'}</strong>
+                <em>{world?.chief?.current_work || (eli5 ? 'Watches every place.' : 'Looks across every world.')}</em>
+                <button type="button" className="os-button" onClick={() => navigate('/os/chief')}>
+                  {eli5 ? 'Ask the boss helper' : 'Ask Chief of Staff'}
+                </button>
+              </div>
+              {planets.map((planet, index) => {
+                const spot = boardSpot(index);
+                const paying = planet.roi
+                  ? (planet.roi.paying
+                    ? (eli5 ? 'This place pays for itself.' : 'This world is paying for itself.')
+                    : (eli5 ? 'This place is not paying for itself yet.' : 'This world is not paying for itself yet.'))
+                  : '';
+                return (
+                  <article
+                    key={planet.id}
+                    className={`world-card is-${planet.mark || 'advance'}`}
+                    style={{
+                      gridColumn: spot.column,
+                      gridRow: spot.row,
+                      borderColor: planet.accent,
+                      color: planet.accent,
+                      ['--world-accent' as string]: planet.accent,
+                    }}
+                  >
+                    <div className="world-card-top">
+                      <PlanetMark mark={planet.mark} />
+                      <HelpTip text={paying ? `${cardHelp} ${paying}` : cardHelp} />
+                    </div>
+                    <strong>{planet.name}</strong>
+                    <em>{tradeOf(planet)}</em>
+                    <small>
+                      {planet.project_count} projects · {planet.goal_count} goals · {planet.agent_count} agents
+                    </small>
+                    <div className="world-card-actions">
+                      <button type="button" className="os-button" onClick={() => openWorld(planet.id)}>
+                        {eli5 ? 'Open this place' : 'Open world'}
+                      </button>
+                      <button type="button" className="os-ghost" onClick={() => openWorld(planet.id, true)}>
+                        {eli5 ? 'Connect mail' : 'Connect email'}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+          <section className="panel archipelago-add">
+            <div className="panel-head">
+              <h2>{eli5 ? 'Add a place' : 'Add a world'}</h2>
+            </div>
+            <p className="section-note">
+              {eli5
+                ? 'Make a new place when you have another business.'
+                : 'Add another business when you want its own mailbox and helpers.'}
+            </p>
+            <form
             className="project-form"
             onSubmit={async (event) => {
               event.preventDefault();
@@ -275,9 +302,10 @@ export function WorldPage() {
               What it is
               <input value={worldSummary} onChange={(event) => setWorldSummary(event.target.value)} />
             </label>
-            <button className="os-primary" type="submit">Create world</button>
+            <button className="os-button" type="submit">{eli5 ? 'Create this place' : 'Create world'}</button>
           </form>
         </section>
+        </div>
       </OsShell>
     );
   }
@@ -289,8 +317,8 @@ export function WorldPage() {
       lede={
         world?.world?.summary
         || (eli5
-          ? 'Each garden is a project. The plants are goals. The helpers stand on the project they are working on.'
-          : 'Projects are living plots. Goals grow on them, and the team is drawn onto the work they are doing right now.')
+          ? 'Projects are the things you make, and helpers stand on the one they are doing.'
+          : 'Projects, goals, and helpers for this world live here.')
       }
       action={
         <button className="os-ghost" type="button" onClick={() => setDeskWorld(null)}>
@@ -557,10 +585,10 @@ export function WorldPage() {
         </ul>
       </section>
 
-      <section className="panel">
+      <section className="panel" id="world-mail">
         <div className="panel-head">
-          <h2>{eli5 ? 'Mail for this world' : 'Google accounts'}</h2>
-          <span className="muted">Point at a credentials file that lives outside this repository.</span>
+          <h2>{eli5 ? 'Mail for this place' : 'Connect email'}</h2>
+          <span className="muted">{eli5 ? 'Add the mailbox this place should use.' : 'Add the mailbox this world should use.'}</span>
         </div>
         {(world?.accounts ?? []).length === 0 && (
           <p className="connect-mail" role="status">

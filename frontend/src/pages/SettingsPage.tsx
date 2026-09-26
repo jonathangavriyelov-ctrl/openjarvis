@@ -899,10 +899,10 @@ export function SettingsPage() {
             </SettingRow>
           </Section>
 
-          <Section title="Leaderboard">
+          <Section title="Advanced">
             <SettingRow
               label="Share Your Savings"
-              description="Off by default. The personal desk does not show the leaderboard prompt until this is on."
+              description="Off. This is the only switch for the optional savings contest. Nothing else asks you to join."
             >
               <button
                 type="button"
@@ -924,18 +924,6 @@ export function SettingsPage() {
                 />
               </button>
             </SettingRow>
-            {settings.leaderboardPrompt && (
-              <div className="pt-3">
-                <button
-                  type="button"
-                  onClick={() => useAppStore.getState().setOptInModalOpen(true)}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium"
-                  style={{ background: 'var(--color-bg-tertiary)', border: '1px solid var(--color-border)', color: 'var(--color-text)', cursor: 'pointer' }}
-                >
-                  Open the opt-in
-                </button>
-              </div>
-            )}
           </Section>
 
           {/* About */}

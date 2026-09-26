@@ -11,6 +11,7 @@ import {
 import { Zap, Activity, Thermometer, Hash, Gauge } from 'lucide-react';
 import { fetchEnergy, fetchTelemetry } from '../../lib/api';
 import { useAppStore } from '../../lib/store';
+import { HelpTip } from '../HelpTip';
 
 interface EnergySample {
   timestamp: string;
@@ -40,26 +41,32 @@ function StatCard({
   label,
   value,
   unit,
+  hint,
+  tip,
 }: {
   icon: typeof Zap;
   label: string;
   value: string;
   unit?: string;
+  hint: string;
+  tip: string;
 }) {
   return (
-    <div className="hud-panel p-4">
+    <div className="hud-panel p-4" style={{ overflow: 'visible' }}>
       <div className="flex items-center gap-2 mb-2">
         <Icon size={12} style={{ color: 'var(--color-accent)' }} />
-        <span className="hud-label">{label}</span>
+        <span className="text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>{label}</span>
+        <HelpTip above text={tip} />
       </div>
-      <div className="hud-mono text-2xl font-semibold truncate" style={{ color: 'var(--color-text)' }}>
+      <div className="text-2xl font-semibold truncate" style={{ color: 'var(--color-text)' }}>
         {value}
         {unit && (
-          <span className="hud-label ml-1" style={{ fontSize: '0.625rem', letterSpacing: '0.18em' }}>
+          <span className="text-sm font-medium ml-1" style={{ color: 'var(--color-text-secondary)' }}>
             {unit}
           </span>
         )}
       </div>
+      <p className="text-xs mt-1" style={{ color: 'var(--color-text-tertiary)' }}>{hint}</p>
     </div>
   );
 }
@@ -113,58 +120,79 @@ export function EnergyDashboard() {
 
   if (error || !energy) {
     return (
-      <div className="hud-panel p-6">
-        <h3 className="hud-label flex items-center gap-2 mb-4">
-          <Zap size={12} style={{ color: 'var(--color-accent)' }} />
-          Energy Monitoring
+      <div className="hud-panel p-6" style={{ overflow: 'visible' }}>
+        <h3 className="text-sm font-semibold flex items-center gap-2 mb-1" style={{ color: 'var(--color-text)' }}>
+          <Zap size={14} style={{ color: 'var(--color-accent)' }} />
+          Energy used by your Mac today
+          <HelpTip above text="Kilojoules and joules measure electricity. Watts are how fast your Mac is using it right now." />
         </h3>
+        <p className="text-xs mb-4" style={{ color: 'var(--color-text-secondary)' }}>
+          This is the electricity your computer used while answering.
+        </p>
         <div className="h-48 flex items-center justify-center text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
-          <span className="hud-mono">{error || 'awaiting telemetry stream…'}</span>
+          <span>{error || 'No energy numbers yet. Ask something on this Mac and they will show up here.'}</span>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="hud-panel p-6">
-      <h3 className="hud-label flex items-center gap-2 mb-4">
-        <Zap size={12} style={{ color: 'var(--color-accent)' }} />
-        Energy Monitoring
+    <div className="hud-panel p-6" style={{ overflow: 'visible' }}>
+      <h3 className="text-sm font-semibold flex items-center gap-2 mb-1" style={{ color: 'var(--color-text)' }}>
+        <Zap size={14} style={{ color: 'var(--color-accent)' }} />
+        Energy used by your Mac today
+        <HelpTip above text="Kilojoules and joules measure electricity. Watts are how fast your Mac is using it right now." />
       </h3>
+      <p className="text-xs mb-4" style={{ color: 'var(--color-text-secondary)' }}>
+        This is the electricity your computer used while answering.
+      </p>
 
       <div className="grid grid-cols-2 gap-3 mb-4">
         <StatCard
           icon={Zap}
-          label="Total Energy"
+          label="Energy used"
           value={((energy.total_energy_j ?? 0) / 1000).toFixed(1)}
-          unit="kJ"
+          unit="kilojoules"
+          hint="All the electricity counted so far."
+          tip="A kilojoule is a measure of energy. This is the total your Mac has used for answers."
         />
         <StatCard
           icon={Activity}
-          label="Energy / Token"
+          label="Energy per token"
           value={(energy.energy_per_token_j ?? 0).toFixed(3)}
-          unit="J"
+          unit="joules"
+          hint="A token is a small piece of a word."
+          tip="Each token is a small piece of text. This is the energy for one of those pieces."
         />
         <StatCard
           icon={Thermometer}
-          label="Avg Power"
+          label="Power right now"
           value={(energy.avg_power_w ?? 0).toFixed(1)}
-          unit="W"
+          unit="watts"
+          hint="How hard your Mac is working this moment."
+          tip="Watts are how fast the computer is using electricity right now."
         />
         <StatCard
           icon={Hash}
-          label="Total Requests"
+          label="Questions asked"
           value={String(savings?.total_calls ?? telemetry?.total_requests ?? 0)}
+          hint="How many times you asked for an answer."
+          tip="Each question you send counts as one request."
         />
         <StatCard
           icon={Gauge}
-          label="Thermal"
+          label="How warm it is"
           value={thermalStatus.label}
+          hint="Cool means the computer is comfortable."
+          tip="Cool, warm, or hot describes how hard the machine is working, not the room temperature."
         />
         <StatCard
           icon={Hash}
-          label="Tokens Processed"
+          label="Text handled"
           value={formatNumber(savings?.total_tokens ?? telemetry?.total_tokens ?? 0)}
+          unit="tokens"
+          hint="Tokens are the small pieces of text read and written."
+          tip="The model reads and writes text in small pieces called tokens."
         />
       </div>
 
