@@ -1,6 +1,6 @@
-import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router';
-import { fetchSettings, updateSettings } from '../../lib/personal-api';
+import { fetchSettings, fetchWorlds, updateSettings, type DeskWorld } from '../../lib/personal-api';
 
 const LINKS = [
   { to: '/os/world', label: 'Eco world', simple: 'Your world' },
@@ -25,6 +25,72 @@ export function useEli5() {
       return () => listeners.delete(listener);
     },
     () => eli5Value,
+  );
+}
+
+const WORLD_KEY = 'openjarvis-desk-world';
+let deskWorldId: string | null = null;
+try {
+  deskWorldId = localStorage.getItem(WORLD_KEY) || null;
+} catch {
+  deskWorldId = null;
+}
+const worldListeners = new Set<() => void>();
+
+export function setDeskWorld(id: string | null) {
+  deskWorldId = id;
+  try {
+    if (id) localStorage.setItem(WORLD_KEY, id);
+    else localStorage.removeItem(WORLD_KEY);
+  } catch {
+    /* storage can be blocked */
+  }
+  worldListeners.forEach((listener) => listener());
+}
+
+export function useDeskWorld() {
+  return useSyncExternalStore(
+    (listener) => {
+      worldListeners.add(listener);
+      return () => worldListeners.delete(listener);
+    },
+    () => deskWorldId,
+  );
+}
+
+function WorldSwitcher() {
+  const current = useDeskWorld();
+  const [worlds, setWorlds] = useState<DeskWorld[]>([]);
+  useEffect(() => {
+    fetchWorlds()
+      .then((data) => setWorlds(data.worlds))
+      .catch(() => {});
+  }, [current]);
+  return (
+    <div className="world-switch" role="tablist" aria-label="Worlds">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={current === null}
+        className={current === null ? 'is-on' : ''}
+        onClick={() => setDeskWorld(null)}
+      >
+        All worlds
+      </button>
+      {worlds.map((world) => (
+        <button
+          key={world.id}
+          type="button"
+          role="tab"
+          aria-selected={current === world.id}
+          className={current === world.id ? 'is-on' : ''}
+          style={{ borderColor: world.accent }}
+          onClick={() => setDeskWorld(world.id)}
+        >
+          {world.name}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -82,6 +148,7 @@ export function OsShell({
       <div className="os-shell">
         <div className="os-nav-row">
           <OsNav />
+          <WorldSwitcher />
           <button
             type="button"
             className={eli5 ? 'eli5-toggle is-on' : 'eli5-toggle'}

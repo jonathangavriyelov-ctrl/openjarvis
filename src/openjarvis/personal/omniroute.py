@@ -102,10 +102,11 @@ class OmniRouteClient:
         *,
         hermes_model: str = "",
         prefers_hermes: bool = False,
+        model: str = "",
     ) -> ModelChoice:
         """Pick the OmniRoute model id for one agent."""
         self._ensure_probed()
-        override = self.agent_models.get(specialist_id, "").strip()
+        override = (model or self.agent_models.get(specialist_id, "")).strip()
         if prefers_hermes or specialist_id == "executive_assistant":
             return self._hermes_choice(override or hermes_model)
         model = override or self.default_model

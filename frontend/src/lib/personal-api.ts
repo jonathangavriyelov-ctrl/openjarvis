@@ -31,6 +31,9 @@ export interface PersonalAgent {
   status: AgentStatus;
   current_work: string;
   model: ModelChoice | null;
+  enabled?: boolean;
+  higgsfield_enabled?: boolean;
+  omniroute_model?: string;
   tasks?: PersonalTask[];
   deliverables?: Deliverable[];
   skills_detail?: { name: string; description: string }[];
@@ -117,6 +120,8 @@ export interface Goal {
   pace: string;
   milestones: Milestone[];
   project_id?: string | null;
+  world_id?: string | null;
+  world_name?: string;
   created_at: string;
   updated_at: string;
 }
@@ -168,12 +173,51 @@ export interface PhoneStatus {
   slack: PhoneChannelStatus;
 }
 
+export interface BriefingSection {
+  id: string;
+  name: string;
+  connected: boolean;
+  inbox: { from: string; subject: string; snippet: string; account?: string }[];
+  meetings: { title: string; when: string; account?: string }[];
+  text: string;
+}
+
 export interface Briefing {
   connected: boolean;
-  inbox: { from: string; subject: string; snippet: string }[];
-  meetings: { title: string; when: string }[];
+  scope?: string;
+  worlds?: BriefingSection[];
+  inbox: { from: string; subject: string; snippet: string; account?: string }[];
+  meetings: { title: string; when: string; account?: string }[];
   text: string;
   google: GoogleStatus;
+}
+
+export interface GoogleAccountView {
+  id: string;
+  world_id: string;
+  email: string;
+  label: string;
+  connected: boolean;
+}
+
+export interface DeskWorld {
+  id: string;
+  name: string;
+  kind: 'personal' | 'business' | string;
+  summary: string;
+  accent: string;
+  project_count: number;
+  goal_count: number;
+  agent_count: number;
+  accounts: GoogleAccountView[];
+}
+
+export interface TeamMember {
+  world_id: string;
+  specialist_id: string;
+  enabled: boolean;
+  omniroute_model: string;
+  higgsfield: boolean;
 }
 
 export interface Proposal {
@@ -212,6 +256,12 @@ export interface Note {
 }
 
 export interface WorldSnapshot {
+  scope?: 'all' | 'world' | 'habitat' | string;
+  worlds?: DeskWorld[];
+  world?: { id: string; name: string; kind: string; summary: string; accent: string } | null;
+  chief?: { id: string; name: string; status: string; current_work: string };
+  team?: TeamMember[];
+  accounts?: GoogleAccountView[];
   agents: PersonalAgent[];
   edges: DelegationEdge[];
   works?: WorkLink[];
@@ -245,7 +295,54 @@ async function read<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export const fetchWorld = () => read<WorldSnapshot>('/v1/personal/world');
+export const fetchWorld = (opts?: { worldId?: string | null; scope?: string }) => {
+  const params = new URLSearchParams();
+  if (opts?.scope) params.set('scope', opts.scope);
+  if (opts?.worldId) params.set('world_id', opts.worldId);
+  const query = params.toString();
+  return read<WorldSnapshot>(`/v1/personal/world${query ? `?${query}` : ''}`);
+};
+
+export const fetchWorlds = () => read<{ worlds: DeskWorld[] }>('/v1/personal/worlds');
+
+export const createWorld = (world: { name: string; summary?: string; accent?: string }) =>
+  read<DeskWorld>('/v1/personal/worlds', {
+    method: 'POST',
+    body: JSON.stringify(world),
+  });
+
+export const updateWorld = (id: string, patch: { name?: string; summary?: string; accent?: string }) =>
+  read<DeskWorld>(`/v1/personal/worlds/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+
+export const deleteWorld = (id: string) =>
+  read<{ deleted: boolean }>(`/v1/personal/worlds/${id}`, { method: 'DELETE' });
+
+export const updateTeamMember = (
+  worldId: string,
+  specialistId: string,
+  patch: { enabled?: boolean; omniroute_model?: string; higgsfield?: boolean },
+) =>
+  read<TeamMember>(`/v1/personal/worlds/${worldId}/team/${specialistId}`, {
+    method: 'PUT',
+    body: JSON.stringify(patch),
+  });
+
+export const connectAccount = (
+  worldId: string,
+  account: { email: string; credentials_path?: string; label?: string },
+) =>
+  read<GoogleAccountView>(`/v1/personal/worlds/${worldId}/accounts`, {
+    method: 'POST',
+    body: JSON.stringify(account),
+  });
+
+export const disconnectAccount = (worldId: string, accountId: string) =>
+  read<{ deleted: boolean }>(`/v1/personal/worlds/${worldId}/accounts/${accountId}`, {
+    method: 'DELETE',
+  });
 
 export const fetchAgent = (id: string) => read<PersonalAgent>(`/v1/personal/agents/${id}`);
 
@@ -256,21 +353,31 @@ export const fetchHermes = () =>
     hermes_model: string;
   }>('/v1/personal/hermes');
 
-export const submitMission = (request: string) =>
+export const submitMission = (
+  request: string,
+  opts?: { worldId?: string | null; scope?: string },
+) =>
   read<Mission>('/v1/personal/missions', {
     method: 'POST',
-    body: JSON.stringify({ request }),
+    body: JSON.stringify({
+      request,
+      world_id: opts?.worldId || null,
+      scope: opts?.worldId ? 'auto' : opts?.scope || 'auto',
+    }),
   });
 
 export const fetchMission = (id: string) => read<Mission>(`/v1/personal/missions/${id}`);
 
-export const fetchMissions = () => read<{ missions: Mission[] }>('/v1/personal/missions');
+export const fetchMissions = (worldId?: string | null) =>
+  read<{ missions: Mission[] }>(
+    `/v1/personal/missions${worldId ? `?world_id=${encodeURIComponent(worldId)}` : ''}`,
+  );
 
 export const runCheckin = () => read<Mission>('/v1/personal/checkin', { method: 'POST' });
 
-export const fetchGoals = () =>
+export const fetchGoals = (worldId?: string | null) =>
   read<{ goals: Goal[]; checkins: { id: string; prompt: string; goal_id: string | null }[] }>(
-    '/v1/personal/goals',
+    `/v1/personal/goals${worldId ? `?world_id=${encodeURIComponent(worldId)}` : ''}`,
   );
 
 export const fetchSettings = () => read<DeskSettings>('/v1/personal/settings');
@@ -281,9 +388,17 @@ export const updateSettings = (patch: { eli5?: boolean }) =>
     body: JSON.stringify(patch),
   });
 
-export const fetchProjects = () => read<{ projects: ProjectPlot[] }>('/v1/personal/projects');
+export const fetchProjects = (worldId?: string | null) =>
+  read<{ projects: ProjectPlot[] }>(
+    `/v1/personal/projects${worldId ? `?world_id=${encodeURIComponent(worldId)}` : ''}`,
+  );
 
-export const createProject = (project: { name: string; summary?: string; accent?: string }) =>
+export const createProject = (project: {
+  name: string;
+  summary?: string;
+  accent?: string;
+  world_id?: string | null;
+}) =>
   read<ProjectPlot>('/v1/personal/projects', {
     method: 'POST',
     body: JSON.stringify(project),
@@ -304,6 +419,7 @@ export const createGoal = (goal: {
   deadline?: string | null;
   progress?: number;
   project_id?: string | null;
+  world_id?: string | null;
 }) =>
   read<Goal>('/v1/personal/goals', {
     method: 'POST',
@@ -322,26 +438,37 @@ export const setMilestone = (goalId: string, milestoneId: string, done: boolean)
     body: JSON.stringify({ done }),
   });
 
-export const fetchDeliverables = (specialistId = '') =>
-  read<{ deliverables: Deliverable[] }>(
-    `/v1/personal/deliverables${specialistId ? `?specialist_id=${encodeURIComponent(specialistId)}` : ''}`,
+export const fetchDeliverables = (specialistId = '', worldId?: string | null) => {
+  const params = new URLSearchParams();
+  if (specialistId) params.set('specialist_id', specialistId);
+  if (worldId) params.set('world_id', worldId);
+  const query = params.toString();
+  return read<{ deliverables: Deliverable[] }>(
+    `/v1/personal/deliverables${query ? `?${query}` : ''}`,
+  );
+};
+
+export const fetchNotes = (worldId?: string | null) =>
+  read<{ notes: Note[] }>(
+    `/v1/personal/notes${worldId ? `?world_id=${encodeURIComponent(worldId)}` : ''}`,
   );
 
-export const fetchNotes = () => read<{ notes: Note[] }>('/v1/personal/notes');
-
-export const captureNote = (note: { title: string; body: string; tags?: string }) =>
+export const captureNote = (note: { title: string; body: string; tags?: string; world_id?: string }) =>
   read<Note>('/v1/personal/notes', {
     method: 'POST',
     body: JSON.stringify(note),
   });
 
-export const askBrain = (question: string) =>
+export const askBrain = (question: string, worldId?: string | null) =>
   read<{ answer: string; hits: string[]; model: ModelChoice }>('/v1/personal/notes/ask', {
     method: 'POST',
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, world_id: worldId || '' }),
   });
 
-export const fetchBriefing = () => read<Briefing>('/v1/personal/briefing');
+export const fetchBriefing = (worldId?: string | null) =>
+  read<Briefing>(
+    `/v1/personal/briefing${worldId ? `?world_id=${encodeURIComponent(worldId)}` : ''}`,
+  );
 
 export const fetchProposals = () => read<{ proposals: Proposal[] }>('/v1/personal/proposals');
 
@@ -353,11 +480,16 @@ export const rejectProposal = (id: string) =>
 
 export const fetchPhone = () => read<PhoneStatus>('/v1/personal/phone');
 
-export const pullDrive = (query: string) =>
-  read<{ connected: boolean; files: { name: string; link: string }[]; notes: Note[] }>(
-    '/v1/personal/drive/pull',
-    { method: 'POST', body: JSON.stringify({ query }) },
-  );
+export const pullDrive = (query: string, worldId?: string | null) =>
+  read<{
+    connected: boolean;
+    files: { name: string; link: string }[];
+    notes: Note[];
+    detail?: string;
+  }>('/v1/personal/drive/pull', {
+    method: 'POST',
+    body: JSON.stringify({ query, world_id: worldId || '' }),
+  });
 
 export function routeLabel(model: ModelChoice | null | undefined): string {
   if (!model || model.source === 'offline' || !model.model_id) return 'Local notes';

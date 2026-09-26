@@ -211,6 +211,88 @@ class GoogleDesk:
         return "\n".join(lines)
 
 
+class ScopedGoogle:
+    """Merge several Google accounts that belong to one world."""
+
+    def __init__(self, desks: list[tuple[str, GoogleDesk]]) -> None:
+        self._desks = desks
+        self.credentials_path = ""
+        if len(desks) == 1:
+            self.credentials_path = desks[0][1].credentials_path
+
+    def connected(self) -> bool:
+        return any(desk.connected() for _email, desk in self._desks)
+
+    def public_status(self) -> dict[str, Any]:
+        connected = self.connected()
+        return {
+            "connected": connected,
+            "gmail": connected,
+            "calendar": connected,
+            "drive": connected,
+            "detail": (
+                "Gmail, Calendar, and Drive are readable."
+                if connected
+                else "Google is not connected."
+            ),
+            "accounts": [email for email, _desk in self._desks],
+        }
+
+    def snapshot(self, query: str = "") -> dict[str, Any]:
+        inbox: list[dict[str, Any]] = []
+        meetings: list[dict[str, Any]] = []
+        files: list[dict[str, Any]] = []
+        connected = False
+        for email, desk in self._desks:
+            snap = desk.snapshot(query)
+            if snap.get("connected"):
+                connected = True
+            for item in snap.get("inbox") or []:
+                row = dict(item)
+                row["account"] = email
+                inbox.append(row)
+            for item in snap.get("meetings") or []:
+                row = dict(item)
+                row["account"] = email
+                meetings.append(row)
+            for item in snap.get("files") or []:
+                row = dict(item)
+                row["account"] = email
+                files.append(row)
+        return {
+            "connected": connected,
+            "inbox": inbox,
+            "meetings": meetings,
+            "files": files,
+        }
+
+    def briefing_text(self, snap: dict[str, Any] | None = None) -> str:
+        data = snap if snap is not None else self.snapshot("")
+        if not data.get("connected"):
+            return ""
+        lines = ["## Inbox"]
+        inbox = data.get("inbox") or []
+        if not inbox:
+            lines.append("- Inbox is clear.")
+        for item in inbox[:8]:
+            account = item.get("account") or ""
+            who = item.get("from") or "Someone"
+            subject = item.get("subject") or "(no subject)"
+            prefix = f"{account}: " if account else ""
+            lines.append(f"- {prefix}{who}: {subject}")
+        lines.append("")
+        lines.append("## Upcoming meetings")
+        meetings = data.get("meetings") or []
+        if not meetings:
+            lines.append("- No upcoming meetings.")
+        for item in meetings[:8]:
+            account = item.get("account") or ""
+            title = item.get("title") or "(no title)"
+            prefix = f"{account}: " if account else ""
+            lines.append(f"- {prefix}{title}")
+        return "\n".join(lines)
+
+
 def _normalize(raw: dict[str, Any], *, connected: bool) -> dict[str, Any]:
     return {
         "connected": connected,

@@ -139,6 +139,39 @@ CREATE TABLE IF NOT EXISTS proposals (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS worlds (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'business',
+    summary TEXT NOT NULL DEFAULT '',
+    accent TEXT NOT NULL DEFAULT '#7dcea0',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS world_team (
+    world_id TEXT NOT NULL,
+    specialist_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    omniroute_model TEXT NOT NULL DEFAULT '',
+    higgsfield INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (world_id, specialist_id)
+);
+CREATE TABLE IF NOT EXISTS google_accounts (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    label TEXT NOT NULL DEFAULT '',
+    credentials_path TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS scoped_agent_state (
+    world_id TEXT NOT NULL,
+    specialist_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    current_work TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (world_id, specialist_id)
+);
 """
 
 
@@ -158,6 +191,12 @@ class PersonalStore:
             "ALTER TABLE goals ADD COLUMN project_id TEXT",
             "ALTER TABLE missions ADD COLUMN project_id TEXT",
             "ALTER TABLE missions ADD COLUMN command TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE goals ADD COLUMN world_id TEXT",
+            "ALTER TABLE projects ADD COLUMN world_id TEXT",
+            "ALTER TABLE missions ADD COLUMN world_id TEXT",
+            "ALTER TABLE notes ADD COLUMN world_id TEXT",
+            "ALTER TABLE deliverables ADD COLUMN world_id TEXT",
+            "ALTER TABLE proposals ADD COLUMN world_id TEXT",
         ):
             try:
                 self._conn.execute(statement)
@@ -184,14 +223,15 @@ class PersonalStore:
         milestones: list[dict[str, Any]] | None = None,
         notes: str = "",
         project_id: str | None = None,
+        world_id: str | None = None,
     ) -> dict[str, Any]:
         goal_id = _new_id()
         now = _now()
         with self._lock:
             self._conn.execute(
                 "INSERT INTO goals (id, title, target, deadline, progress, notes, "
-                "project_id, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "project_id, world_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     goal_id,
                     title,
@@ -200,6 +240,7 @@ class PersonalStore:
                     progress,
                     notes,
                     project_id or None,
+                    world_id or None,
                     now,
                     now,
                 ),
@@ -230,11 +271,17 @@ class PersonalStore:
             (progress, goal_id),
         )
 
-    def list_goals(self) -> list[dict[str, Any]]:
+    def list_goals(self, world_id: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM goals ORDER BY created_at DESC"
-            ).fetchall()
+            if world_id:
+                rows = self._conn.execute(
+                    "SELECT * FROM goals WHERE world_id = ? ORDER BY created_at DESC",
+                    (world_id,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM goals ORDER BY created_at DESC"
+                ).fetchall()
             return [self._goal_with_milestones(dict(row)) for row in rows]
 
     def get_goal(self, goal_id: str) -> dict[str, Any] | None:
@@ -321,14 +368,24 @@ class PersonalStore:
         *,
         project_id: str = "",
         command: str = "",
+        world_id: str = "",
     ) -> dict[str, Any]:
         mission_id = _new_id()
         now = _now()
         with self._lock:
             self._conn.execute(
                 "INSERT INTO missions (id, request, status, project_id, command, "
-                "created_at, updated_at) VALUES (?, ?, 'planning', ?, ?, ?, ?)",
-                (mission_id, request, project_id or None, command, now, now),
+                "world_id, created_at, updated_at) "
+                "VALUES (?, ?, 'planning', ?, ?, ?, ?, ?)",
+                (
+                    mission_id,
+                    request,
+                    project_id or None,
+                    command,
+                    world_id or None,
+                    now,
+                    now,
+                ),
             )
             self._conn.commit()
         mission = self.get_mission(mission_id)
@@ -379,16 +436,25 @@ class PersonalStore:
             ).fetchone()
         return self._mission(row) if row else None
 
-    def list_missions(self, limit: int = 20) -> list[dict[str, Any]]:
+    def list_missions(
+        self, limit: int = 20, world_id: str | None = None
+    ) -> list[dict[str, Any]]:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM missions ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
+            if world_id:
+                rows = self._conn.execute(
+                    "SELECT * FROM missions WHERE world_id = ? "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (world_id, limit),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM missions ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
         return [self._mission(row) for row in rows]
 
-    def latest_mission(self) -> dict[str, Any] | None:
-        missions = self.list_missions(limit=1)
+    def latest_mission(self, world_id: str | None = None) -> dict[str, Any] | None:
+        missions = self.list_missions(limit=1, world_id=world_id)
         return missions[0] if missions else None
 
     # -- tasks and deliverables ----------------------------------------------
@@ -488,14 +554,15 @@ class PersonalStore:
         body: str,
         model_id: str = "",
         model_source: str = "",
+        world_id: str = "",
     ) -> dict[str, Any]:
         deliverable_id = _new_id()
         now = _now()
         with self._lock:
             self._conn.execute(
                 "INSERT INTO deliverables (id, mission_id, task_id, specialist_id, "
-                "title, kind, body, model_id, model_source, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "title, kind, body, model_id, model_source, world_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     deliverable_id,
                     mission_id,
@@ -506,6 +573,7 @@ class PersonalStore:
                     body,
                     model_id,
                     model_source,
+                    world_id or None,
                     now,
                 ),
             )
@@ -525,20 +593,26 @@ class PersonalStore:
         self,
         *,
         specialist_id: str = "",
+        world_id: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        values: list[Any] = []
+        if specialist_id:
+            clauses.append("specialist_id = ?")
+            values.append(specialist_id)
+        if world_id:
+            clauses.append("world_id = ?")
+            values.append(world_id)
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        values.append(limit)
         with self._lock:
-            if specialist_id:
-                rows = self._conn.execute(
-                    "SELECT * FROM deliverables WHERE specialist_id = ? "
-                    "ORDER BY created_at DESC LIMIT ?",
-                    (specialist_id, limit),
-                ).fetchall()
-            else:
-                rows = self._conn.execute(
-                    "SELECT * FROM deliverables ORDER BY created_at DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
+            rows = self._conn.execute(
+                "SELECT * FROM deliverables "
+                + where
+                + "ORDER BY created_at DESC LIMIT ?",
+                values,
+            ).fetchall()
             items = []
             for row in rows:
                 data = dict(row)
@@ -556,14 +630,15 @@ class PersonalStore:
         tags: str = "",
         source: str = "second_brain",
         memory_id: str = "",
+        world_id: str = "",
     ) -> dict[str, Any]:
         note_id = _new_id()
         now = _now()
         with self._lock:
             self._conn.execute(
                 "INSERT INTO notes (id, title, body, tags, source, memory_id, "
-                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (note_id, title, body, tags, source, memory_id, now),
+                "world_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (note_id, title, body, tags, source, memory_id, world_id or None, now),
             )
             self._conn.commit()
         return {
@@ -573,18 +648,33 @@ class PersonalStore:
             "tags": tags,
             "source": source,
             "memory_id": memory_id,
+            "world_id": world_id or None,
             "created_at": now,
         }
 
-    def list_notes(self, limit: int = 50) -> list[dict[str, Any]]:
+    def list_notes(
+        self, limit: int = 50, world_id: str | None = None
+    ) -> list[dict[str, Any]]:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM notes ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
+            if world_id:
+                rows = self._conn.execute(
+                    "SELECT * FROM notes WHERE world_id = ? "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (world_id, limit),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM notes ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
         return [dict(row) for row in rows]
 
-    def search_notes(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
+    def search_notes(
+        self,
+        query: str,
+        limit: int = 5,
+        world_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         words = []
         for raw in (query or "").split():
             word = raw.replace("%", "").replace("_", "")
@@ -600,10 +690,16 @@ class PersonalStore:
             clauses.append("(title LIKE ? OR body LIKE ? OR tags LIKE ?)")
             like = f"%{word}%"
             values.extend([like, like, like])
+        scope = ""
+        if world_id:
+            scope = " AND world_id = ?"
+            values.append(world_id)
         values.append(limit)
         sql = (
-            "SELECT * FROM notes WHERE "
+            "SELECT * FROM notes WHERE ("
             + " OR ".join(clauses)
+            + ")"
+            + scope
             + " ORDER BY created_at DESC LIMIT ?"
         )
         with self._lock:
@@ -708,19 +804,21 @@ class PersonalStore:
         summary: str = "",
         accent: str = "#7dcea0",
         example: bool = False,
+        world_id: str = "",
     ) -> dict[str, Any]:
         project_id = _new_id()
         now = _now()
         with self._lock:
             self._conn.execute(
                 "INSERT INTO projects (id, name, summary, accent, example, "
-                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "world_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     project_id,
                     name.strip(),
                     summary.strip(),
                     accent,
                     int(example),
+                    world_id or None,
                     now,
                     now,
                 ),
@@ -730,11 +828,17 @@ class PersonalStore:
         assert project is not None
         return project
 
-    def list_projects(self) -> list[dict[str, Any]]:
+    def list_projects(self, world_id: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM projects ORDER BY created_at"
-            ).fetchall()
+            if world_id:
+                rows = self._conn.execute(
+                    "SELECT * FROM projects WHERE world_id = ? ORDER BY created_at",
+                    (world_id,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM projects ORDER BY created_at"
+                ).fetchall()
         return [self._project(row) for row in rows]
 
     def get_project(self, project_id: str) -> dict[str, Any] | None:
@@ -793,6 +897,312 @@ class PersonalStore:
             ).fetchone()
         return row["value"] if row else default
 
+    _TEAM_SEED = (
+        ("chief_of_staff", 0),
+        ("executive_assistant", 0),
+        ("marketing_content", 1),
+        ("second_brain", 0),
+    )
+
+    def ensure_worlds(self) -> None:
+        """Seed Personal and Quick Funders once, then keep new rows on a world."""
+        if self.get_setting("worlds_seeded") == "1":
+            return
+        personal = self.create_world(
+            "Personal",
+            kind="personal",
+            summary="Jonathan's own mail, calendar, notes, and goals.",
+            accent="#9ec9f5",
+        )
+        funders = self.create_world(
+            "Quick Funders",
+            kind="business",
+            summary="The funding business: its pipeline, mail, and docs.",
+            accent="#7dcea0",
+        )
+        for project in self.list_projects():
+            name = project["name"].lower()
+            target = funders["id"] if "quick funders" in name else personal["id"]
+            self.set_project_world(project["id"], target)
+        self._backfill_world(personal["id"])
+        self.set_setting("worlds_seeded", "1")
+
+    def create_world(
+        self,
+        name: str,
+        *,
+        kind: str = "business",
+        summary: str = "",
+        accent: str = "#7dcea0",
+    ) -> dict[str, Any]:
+        world_id = _new_id()
+        now = _now()
+        kind_name = "personal" if kind == "personal" else "business"
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO worlds (id, name, kind, summary, accent, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (world_id, name.strip(), kind_name, summary.strip(), accent, now, now),
+            )
+            for specialist_id, higgsfield in self._TEAM_SEED:
+                self._conn.execute(
+                    "INSERT INTO world_team (world_id, specialist_id, enabled, "
+                    "omniroute_model, higgsfield) VALUES (?, ?, 1, '', ?)",
+                    (world_id, specialist_id, higgsfield),
+                )
+            self._conn.commit()
+        world = self.get_world(world_id)
+        assert world is not None
+        return world
+
+    def list_worlds(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM worlds ORDER BY kind DESC, created_at"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_world(self, world_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM worlds WHERE id = ?", (world_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def personal_world(self) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM worlds WHERE kind = 'personal' "
+                "ORDER BY created_at LIMIT 1"
+            ).fetchone()
+        return dict(row) if row else None
+
+    def match_world(self, text: str) -> dict[str, Any] | None:
+        import re
+
+        lowered = (text or "").lower()
+        found: dict[str, Any] | None = None
+        for world in self.list_worlds():
+            name = world["name"].strip().lower()
+            if not name:
+                continue
+            if re.search(rf"\b{re.escape(name)}\b", lowered) and (
+                found is None or len(name) > len(found["name"])
+            ):
+                found = world
+        return found
+
+    def update_world(self, world_id: str, **fields: Any) -> dict[str, Any] | None:
+        allowed = ("name", "summary", "accent")
+        sets: list[str] = []
+        values: list[Any] = []
+        for key in allowed:
+            if key in fields and fields[key] is not None:
+                sets.append(f"{key} = ?")
+                values.append(str(fields[key]).strip())
+        if not sets:
+            return self.get_world(world_id)
+        sets.append("updated_at = ?")
+        values.append(_now())
+        values.append(world_id)
+        with self._lock:
+            cur = self._conn.execute(
+                f"UPDATE worlds SET {', '.join(sets)} WHERE id = ?",
+                values,
+            )
+            self._conn.commit()
+        if cur.rowcount == 0:
+            return None
+        return self.get_world(world_id)
+
+    def delete_world(self, world_id: str) -> str:
+        world = self.get_world(world_id)
+        if world is None:
+            return "missing"
+        if world["kind"] == "personal":
+            return "personal"
+        with self._lock:
+            mission_ids = [
+                row["id"]
+                for row in self._conn.execute(
+                    "SELECT id FROM missions WHERE world_id = ?", (world_id,)
+                ).fetchall()
+            ]
+            for mission_id in mission_ids:
+                self._conn.execute(
+                    "DELETE FROM tasks WHERE mission_id = ?", (mission_id,)
+                )
+            for table in (
+                "projects",
+                "goals",
+                "missions",
+                "notes",
+                "deliverables",
+                "proposals",
+                "world_team",
+                "google_accounts",
+                "scoped_agent_state",
+            ):
+                self._conn.execute(
+                    f"DELETE FROM {table} WHERE world_id = ?",
+                    (world_id,),
+                )
+            self._conn.execute("DELETE FROM worlds WHERE id = ?", (world_id,))
+            self._conn.commit()
+        return "deleted"
+
+    def set_project_world(self, project_id: str, world_id: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE projects SET world_id = ?, updated_at = ? WHERE id = ?",
+                (world_id, _now(), project_id),
+            )
+            self._conn.commit()
+
+    def _backfill_world(self, personal_id: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE goals SET world_id = ("
+                "SELECT projects.world_id FROM projects "
+                "WHERE projects.id = goals.project_id) "
+                "WHERE goals.project_id IS NOT NULL "
+                "AND (goals.world_id IS NULL OR goals.world_id = '')"
+            )
+            self._conn.execute(
+                "UPDATE missions SET world_id = ("
+                "SELECT projects.world_id FROM projects "
+                "WHERE projects.id = missions.project_id) "
+                "WHERE missions.project_id IS NOT NULL "
+                "AND (missions.world_id IS NULL OR missions.world_id = '')"
+            )
+            for table in ("goals", "missions", "notes", "deliverables", "proposals"):
+                self._conn.execute(
+                    f"UPDATE {table} SET world_id = ? "
+                    "WHERE world_id IS NULL OR world_id = ''",
+                    (personal_id,),
+                )
+            self._conn.commit()
+
+    def team(self, world_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM world_team WHERE world_id = ? ORDER BY specialist_id",
+                (world_id,),
+            ).fetchall()
+        team = []
+        for row in rows:
+            data = dict(row)
+            data["enabled"] = bool(data["enabled"])
+            data["higgsfield"] = bool(data["higgsfield"])
+            team.append(data)
+        return team
+
+    def update_team(
+        self, world_id: str, specialist_id: str, **fields: Any
+    ) -> dict[str, Any] | None:
+        current = next(
+            (
+                row
+                for row in self.team(world_id)
+                if row["specialist_id"] == specialist_id
+            ),
+            None,
+        )
+        if current is None:
+            return None
+        enabled = 1 if fields.get("enabled", current["enabled"]) else 0
+        higgsfield = 1 if fields.get("higgsfield", current["higgsfield"]) else 0
+        model = fields.get("omniroute_model", current["omniroute_model"])
+        with self._lock:
+            self._conn.execute(
+                "UPDATE world_team SET enabled = ?, omniroute_model = ?, "
+                "higgsfield = ? WHERE world_id = ? AND specialist_id = ?",
+                (enabled, str(model or ""), higgsfield, world_id, specialist_id),
+            )
+            self._conn.commit()
+        return next(
+            row for row in self.team(world_id) if row["specialist_id"] == specialist_id
+        )
+
+    def add_google_account(
+        self,
+        world_id: str,
+        *,
+        email: str,
+        credentials_path: str = "",
+        label: str = "",
+    ) -> dict[str, Any]:
+        account_id = _new_id()
+        now = _now()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO google_accounts (id, world_id, email, label, "
+                "credentials_path, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    account_id,
+                    world_id,
+                    email.strip(),
+                    (label or email).strip(),
+                    credentials_path.strip(),
+                    now,
+                ),
+            )
+            self._conn.commit()
+        account = self.get_google_account(account_id)
+        assert account is not None
+        return account
+
+    def list_google_accounts(self, world_id: str | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            if world_id:
+                rows = self._conn.execute(
+                    "SELECT * FROM google_accounts WHERE world_id = ? "
+                    "ORDER BY created_at",
+                    (world_id,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM google_accounts ORDER BY created_at"
+                ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_google_account(self, account_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM google_accounts WHERE id = ?", (account_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def delete_google_account(self, account_id: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM google_accounts WHERE id = ?", (account_id,)
+            )
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    def set_scoped_state(
+        self, world_id: str, specialist_id: str, status: str, current_work: str
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO scoped_agent_state (world_id, specialist_id, status, "
+                "current_work, updated_at) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(world_id, specialist_id) DO UPDATE SET "
+                "status = excluded.status, current_work = excluded.current_work, "
+                "updated_at = excluded.updated_at",
+                (world_id or "*", specialist_id, status, current_work, _now()),
+            )
+            self._conn.commit()
+
+    def scoped_states(self, world_id: str) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM scoped_agent_state WHERE world_id = ?",
+                (world_id or "*",),
+            ).fetchall()
+        return {row["specialist_id"]: dict(row) for row in rows}
+
     def set_setting(self, key: str, value: str) -> None:
         with self._lock:
             self._conn.execute(
@@ -841,15 +1251,25 @@ class PersonalStore:
         title: str,
         payload: dict[str, Any],
         mission_id: str = "",
+        world_id: str = "",
     ) -> dict[str, Any]:
         now = _now()
         row_id = _new_id()
         with self._lock:
             self._conn.execute(
                 "INSERT INTO proposals (id, kind, title, payload_json, status, "
-                "detail, mission_id, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, 'pending', '', ?, ?, ?)",
-                (row_id, kind, title, json.dumps(payload), mission_id, now, now),
+                "detail, mission_id, world_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, 'pending', '', ?, ?, ?, ?)",
+                (
+                    row_id,
+                    kind,
+                    title,
+                    json.dumps(payload),
+                    mission_id,
+                    world_id or None,
+                    now,
+                    now,
+                ),
             )
             self._conn.commit()
         stored = self.get_proposal(row_id)

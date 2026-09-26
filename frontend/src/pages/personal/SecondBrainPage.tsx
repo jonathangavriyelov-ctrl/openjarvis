@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { askBrain, captureNote, fetchBriefing, fetchNotes, pullDrive, type Note } from '../../lib/personal-api';
-import { OsError, OsShell } from './Shell';
+import { OsError, OsShell, useDeskWorld } from './Shell';
 import './personal.css';
 
 export function SecondBrainPage() {
+  const deskWorld = useDeskWorld();
   const [notes, setNotes] = useState<Note[]>([]);
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -15,17 +16,22 @@ export function SecondBrainPage() {
   const [busy, setBusy] = useState(false);
 
   const refresh = () => {
-    fetchNotes().then((data) => setNotes(data.notes)).catch((err: Error) => setError(err.message));
+    fetchNotes(deskWorld).then((data) => setNotes(data.notes)).catch((err: Error) => setError(err.message));
   };
 
   useEffect(() => {
     refresh();
-    fetchBriefing()
+    if (!deskWorld) {
+      setDriveNote('Open a world before pulling Drive docs.');
+      return;
+    }
+    fetchBriefing(deskWorld)
       .then((data) => {
         if (!data.connected) setDriveNote('Google Drive is not connected.');
+        else setDriveNote('');
       })
       .catch(() => {});
-  }, []);
+  }, [deskWorld]);
 
   return (
     <OsShell
@@ -41,7 +47,7 @@ export function SecondBrainPage() {
             event.preventDefault();
             if (!body.trim()) return;
             setBusy(true);
-            captureNote({ title, body })
+            captureNote({ title, body, world_id: deskWorld || '' })
               .then(() => {
                 setTitle('');
                 setBody('');
@@ -63,7 +69,7 @@ export function SecondBrainPage() {
             event.preventDefault();
             if (!question.trim()) return;
             setBusy(true);
-            askBrain(question)
+            askBrain(question, deskWorld)
               .then((data) => setAnswer(data.answer))
               .catch((err: Error) => setError(err.message))
               .finally(() => setBusy(false));
@@ -83,9 +89,11 @@ export function SecondBrainPage() {
           if (!driveQuery.trim()) return;
           setBusy(true);
           setDriveNote('');
-          pullDrive(driveQuery)
+          pullDrive(driveQuery, deskWorld)
             .then((data) => {
-              if (!data.connected) {
+              if (data.detail) {
+                setDriveNote(data.detail);
+              } else if (!data.connected) {
                 setDriveNote('Google Drive is not connected.');
               } else if (data.notes.length === 0) {
                 setDriveNote('No new matching Drive docs.');

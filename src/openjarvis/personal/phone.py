@@ -51,7 +51,7 @@ class PhoneGate:
         cleaned = (text or "").strip()
         if not cleaned:
             return None
-        detail = office.run_mission(cleaned)
+        detail = office.run_mission(cleaned, scope="route")
         summary = (detail.get("summary") or "").strip()
         if not summary:
             summary = "The chief of staff finished with nothing to report."

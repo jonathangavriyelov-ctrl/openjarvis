@@ -44,8 +44,17 @@ def test_higgsfield_submits_and_polls_without_leaking_the_key():
                 },
             )
         if url.endswith("/vid/status"):
-            return (200, {"status": "completed", "video": {"url": "https://cdn.example/clip.mp4"}})
-        return (200, {"status": "completed", "images": [{"url": "https://cdn.example/pic.jpg"}]})
+            return (
+                200,
+                {
+                    "status": "completed",
+                    "video": {"url": "https://cdn.example/clip.mp4"},
+                },
+            )
+        return (
+            200,
+            {"status": "completed", "images": [{"url": "https://cdn.example/pic.jpg"}]},
+        )
 
     client = HiggsfieldClient(
         "test-id:test-secret",

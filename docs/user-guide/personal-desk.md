@@ -219,12 +219,48 @@ Someone else's Slack user id cannot start a mission. If
 `SLACK_ALLOWED_USER_ID` is empty, Slack does not listen, even when the bot
 token is set.
 
+## Worlds
+
+A world is a separate space. Jonathan starts with **Personal** and one
+business world, **Quick Funders**. Add, rename, or delete business worlds
+from the eco world. Personal cannot be deleted.
+
+Each world has its own:
+
+- Google account or accounts (mail, calendar, and Drive for that world)
+- projects, goals, notes, and deliverables
+- agent team, including which model OmniRoute should use and whether that
+  agent may call Higgsfield
+
+Business mail stays in the business world. Personal agents do not read it.
+The top-level Chief of Staff is the exception: that chief can see every
+world, route a request when you name the world, and give one combined
+daily briefing. On the phone, say the world name (for example "Quick
+Funders") to land in that world. If you do not name one, the top-level
+chief answers across worlds and does not mix the businesses into one
+specialist task.
+
+### More than one Google account
+
+`jarvis connect gmail` still signs in one account and writes one credentials
+file. For a second account, run the connect flow again (or use a second
+Desktop client) so you have a second JSON file **outside this repository**.
+In the dashboard, open the world and assign that file with the account
+email. The desk stores the file path, not the token, and API responses
+never include the path or the secret.
+
+The eco world draws each world as a planet around the top-level chief.
+Click a planet to zoom into that world's projects, goals, and agents.
+
 ## What you should see
 
-- **Chief of Staff**: an inbox and meetings card, a phone line for Telegram
-  and Slack, and any email or calendar drafts with Approve and Reject.
-- **Second Brain**: Pull from Drive, then the saved notes in the list.
-- **Eco world**: a short line when Google is readable or Telegram is on.
+- **Chief of Staff**: an inbox and meetings card (one world, or a combined
+  card when All worlds is selected), a phone line for Telegram and Slack,
+  and any email or calendar drafts with Approve and Reject.
+- **Second Brain**: Pull from Drive inside a world, then the saved notes.
+  From All worlds the page asks you to open a world first.
+- **Eco world**: planets for Personal, Quick Funders, and any world you
+  add. A line when Google is readable or Telegram is on.
 
 The dashboard never shows the bot token, the OAuth client secret, or the
 refresh token.

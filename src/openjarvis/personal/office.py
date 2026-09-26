@@ -14,7 +14,7 @@ from openjarvis.personal.goals import (
     default_milestones,
     pace_label,
 )
-from openjarvis.personal.google_desk import GoogleDesk, drafts_for
+from openjarvis.personal.google_desk import GoogleDesk, ScopedGoogle, drafts_for
 from openjarvis.personal.hermes import (
     resolve_configured_model,
     resolve_executive_model,
@@ -48,6 +48,9 @@ from openjarvis.workflow.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+OVERALL = "*"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _visual_section(assets: list[dict[str, Any]]) -> str:
@@ -135,6 +138,8 @@ class PersonalOffice:
     ) -> None:
         self.store = PersonalStore(db_path)
         self.store.ensure_example_projects()
+        self.store.ensure_worlds()
+        self._world_google: dict[str, GoogleDesk | ScopedGoogle] = {}
         self.engine = engine
         self.memory = MemoryBridge(memory)
         self.scheduler = scheduler
@@ -186,6 +191,21 @@ class PersonalOffice:
         self._run_lock = threading.Lock()
         self._thread_lock = threading.Lock()
         self._threads: dict[str, threading.Thread] = {}
+
+    def _presence(
+        self,
+        specialist_id: str,
+        status: str,
+        current_work: str,
+        world_id: str | None = None,
+    ) -> None:
+        scope = (
+            world_id
+            if world_id is not None
+            else (self._turn.get("world_id") or OVERALL)
+        )
+        self.store.set_agent_state(specialist_id, status, current_work)
+        self.store.set_scoped_state(str(scope), specialist_id, status, current_work)
 
     def close(self) -> None:
         for channel in self._phone_channels.values():
@@ -262,17 +282,29 @@ class PersonalOffice:
             route=raw.get("route") or "engine",
         )
 
-    def _agent_choices(self, executive: Any, configured: Any) -> dict[str, Any]:
+    def _agent_choices(
+        self,
+        executive: Any,
+        configured: Any,
+        world_id: str = "",
+    ) -> dict[str, Any]:
         """One model choice per agent, OmniRoute first when it is reachable."""
         status = self.omniroute.public_status()
+        team = {
+            row["specialist_id"]: row
+            for row in self.store.team(world_id)
+            if world_id and world_id != OVERALL
+        }
         choices: dict[str, Any] = {}
         for spec in list_specialists():
             engine_choice = executive if spec.prefers_hermes else configured
+            override = (team.get(spec.id) or {}).get("omniroute_model") or ""
             if status.get("reachable"):
                 choices[spec.id] = self.omniroute.choice_for(
                     spec.id,
                     hermes_model=self.hermes_model,
                     prefers_hermes=spec.prefers_hermes,
+                    model=override,
                 )
             else:
                 choices[spec.id] = engine_choice
@@ -343,8 +375,14 @@ class PersonalOffice:
         goal["pace"] = pace_label(status)
         return goal
 
-    def list_goals(self) -> list[dict[str, Any]]:
-        return [self._decorate_goal(goal) for goal in self.store.list_goals()]
+    def list_goals(self, world_id: str | None = None) -> list[dict[str, Any]]:
+        names = {world["id"]: world["name"] for world in self.store.list_worlds()}
+        goals = []
+        for goal in self.store.list_goals(world_id):
+            row = self._decorate_goal(goal)
+            row["world_name"] = names.get(goal.get("world_id") or "", "")
+            goals.append(row)
+        return goals
 
     def create_goal(
         self,
@@ -354,7 +392,15 @@ class PersonalOffice:
         deadline: str | None = None,
         progress: float = 0,
         project_id: str | None = None,
+        world_id: str | None = None,
     ) -> dict[str, Any]:
+        scope = world_id or ""
+        if not scope and project_id:
+            project = self.store.get_project(project_id)
+            scope = (project or {}).get("world_id") or ""
+        if not scope:
+            personal = self.store.personal_world()
+            scope = personal["id"] if personal else ""
         goal = self.store.create_goal(
             title.strip(),
             target=target.strip() or "Completed",
@@ -362,6 +408,7 @@ class PersonalOffice:
             progress=progress,
             milestones=default_milestones(title.strip()),
             project_id=project_id,
+            world_id=scope,
         )
         self._schedule_checkin(goal)
         return self._decorate_goal(goal)
@@ -419,22 +466,183 @@ class PersonalOffice:
 
     # -- second brain --------------------------------------------------------
 
-    def capture_note(self, title: str, body: str, *, tags: str = "") -> dict[str, Any]:
+    def capture_note(
+        self,
+        title: str,
+        body: str,
+        *,
+        tags: str = "",
+        world_id: str = "",
+    ) -> dict[str, Any]:
+        scope = world_id or self._personal_id()
         memory_id = self.memory.store(
             f"{title}\n\n{body}",
-            {"tags": tags, "title": title},
+            {"tags": tags, "title": title, "world_id": scope},
         )
         return self.store.add_note(
             title.strip() or "Note",
             body.strip(),
             tags=tags,
             memory_id=memory_id,
+            world_id=scope,
         )
 
-    def ask_memory(self, question: str) -> dict[str, Any]:
-        notes = self.store.search_notes(question)
+    def _personal_id(self) -> str:
+        personal = self.store.personal_world()
+        return personal["id"] if personal else ""
+
+    def _target_world(self, text: str, scope: str) -> str:
+        named = self.store.match_world(text)
+        if named:
+            return named["id"]
+        project = self._project_named_in(text)
+        if project and project.get("world_id"):
+            return str(project["world_id"])
+        if scope in ("route", "all"):
+            return OVERALL
+        return self._personal_id()
+
+    def set_world_google(self, world_id: str, desk: GoogleDesk | ScopedGoogle) -> None:
+        """Tests and setup can pin a world's mail without a credentials file."""
+        self._world_google[world_id] = desk
+
+    def _google_for(self, world_id: str) -> GoogleDesk | ScopedGoogle:
+        if world_id in self._world_google:
+            return self._world_google[world_id]
+        accounts = []
+        if world_id and world_id != OVERALL:
+            accounts = self.store.list_google_accounts(world_id)
+        desks: list[tuple[str, GoogleDesk]] = []
+        for account in accounts:
+            path = account.get("credentials_path") or ""
+            if path:
+                label = account.get("email") or account["id"]
+                desks.append((label, GoogleDesk(path)))
+        if desks:
+            return ScopedGoogle(desks)
+        personal_id = self._personal_id()
+        if not world_id or world_id == personal_id:
+            return self.google
+        return GoogleDesk("")
+
+    def _credentials_outside_repo(self, path: str) -> None:
+        if not (path or "").strip():
+            return
+        resolved = Path(path).expanduser().resolve()
+        if resolved == _REPO_ROOT or _REPO_ROOT in resolved.parents:
+            raise ValueError("Keep Google credentials outside this repository.")
+
+    def _public_account(self, account: dict[str, Any]) -> dict[str, Any]:
+        path = account.get("credentials_path") or ""
+        connected = GoogleDesk(path).connected() if path else False
+        return {
+            "id": account["id"],
+            "world_id": account.get("world_id") or "",
+            "email": account.get("email") or "",
+            "label": account.get("label") or "",
+            "connected": connected,
+        }
+
+    def list_worlds(self) -> list[dict[str, Any]]:
+        cards = []
+        for world in self.store.list_worlds():
+            cards.append(self._world_card(world))
+        return cards
+
+    def _world_card(self, world: dict[str, Any]) -> dict[str, Any]:
+        world_id = world["id"]
+        team = self.store.team(world_id)
+        return {
+            "id": world_id,
+            "name": world["name"],
+            "kind": world["kind"],
+            "summary": world.get("summary") or "",
+            "accent": world.get("accent") or "#7dcea0",
+            "project_count": len(self.store.list_projects(world_id)),
+            "goal_count": len(self.store.list_goals(world_id)),
+            "agent_count": sum(1 for row in team if row.get("enabled")),
+            "accounts": [
+                self._public_account(account)
+                for account in self.store.list_google_accounts(world_id)
+            ],
+        }
+
+    def create_world(
+        self,
+        name: str,
+        *,
+        summary: str = "",
+        accent: str = "#7dcea0",
+        kind: str = "business",
+    ) -> dict[str, Any]:
+        world = self.store.create_world(name, kind=kind, summary=summary, accent=accent)
+        return self._world_card(world)
+
+    def rename_world(self, world_id: str, **fields: Any) -> dict[str, Any] | None:
+        world = self.store.update_world(world_id, **fields)
+        if world is None:
+            return None
+        return self._world_card(world)
+
+    def delete_world(self, world_id: str) -> str:
+        return self.store.delete_world(world_id)
+
+    def world_team(self, world_id: str) -> list[dict[str, Any]]:
+        return self.store.team(world_id)
+
+    def update_world_team(
+        self, world_id: str, specialist_id: str, **fields: Any
+    ) -> dict[str, Any] | None:
+        return self.store.update_team(world_id, specialist_id, **fields)
+
+    def connect_google_account(
+        self,
+        world_id: str,
+        *,
+        email: str,
+        credentials_path: str = "",
+        label: str = "",
+    ) -> dict[str, Any]:
+        if self.store.get_world(world_id) is None:
+            raise KeyError(world_id)
+        self._credentials_outside_repo(credentials_path)
+        account = self.store.add_google_account(
+            world_id,
+            email=email,
+            credentials_path=credentials_path,
+            label=label,
+        )
+        self._world_google.pop(world_id, None)
+        return self._public_account(account)
+
+    def disconnect_google_account(self, account_id: str) -> bool:
+        account = self.store.get_google_account(account_id)
+        if account is None:
+            return False
+        removed = self.store.delete_google_account(account_id)
+        self._world_google.pop(account.get("world_id") or "", None)
+        return removed
+
+    def _enabled_roster(self, world_id: str) -> list[Any]:
+        team = {row["specialist_id"]: row for row in self.store.team(world_id)}
+        roster = []
+        for spec in list_specialists(include_chief=False):
+            row = team.get(spec.id)
+            if row is None or row.get("enabled", True):
+                roster.append(spec)
+        return roster
+
+    def _higgsfield_on(self, world_id: str, specialist_id: str) -> bool:
+        for row in self.store.team(world_id):
+            if row["specialist_id"] == specialist_id:
+                return bool(row["higgsfield"])
+        return specialist_id == "marketing_content"
+
+    def ask_memory(self, question: str, world_id: str | None = None) -> dict[str, Any]:
+        scope = world_id or self._personal_id()
+        notes = self.store.search_notes(question, world_id=scope or None)
         hits = [note["body"] for note in notes]
-        for hit in self.memory.search(question):
+        for hit in self.memory.search(question, world_id=scope or None):
             if hit not in hits:
                 hits.append(hit)
         spec_id = "second_brain"
@@ -461,7 +669,12 @@ class PersonalOffice:
     # -- missions ------------------------------------------------------------
 
     def submit_mission(
-        self, request: str, *, project_id: str | None = None
+        self,
+        request: str,
+        *,
+        project_id: str | None = None,
+        world_id: str | None = None,
+        scope: str = "auto",
     ) -> dict[str, Any]:
         text = (request or "").strip()
         if not text:
@@ -470,10 +683,14 @@ class PersonalOffice:
         project = self.store.get_project(project_id) if project_id else None
         if project is None:
             project = self._project_named_in(text)
+        target = world_id or self._target_world(text, scope)
+        if project and project.get("world_id") and not world_id:
+            target = project["world_id"]
         mission = self.store.create_mission(
             text,
             project_id=project["id"] if project else "",
             command=command.name if command else "",
+            world_id=target,
         )
         thread = threading.Thread(
             target=self._execute,
@@ -488,9 +705,14 @@ class PersonalOffice:
         assert stored is not None
         return stored
 
-    def run_mission(self, request: str) -> dict[str, Any]:
+    def run_mission(
+        self,
+        request: str,
+        world_id: str | None = None,
+        scope: str = "auto",
+    ) -> dict[str, Any]:
         """Run a mission and wait. Used by tests and the check-in endpoint."""
-        mission = self.submit_mission(request)
+        mission = self.submit_mission(request, world_id=world_id, scope=scope)
         thread = self._threads[mission["id"]]
         thread.join()
         return self.mission_detail(mission["id"])
@@ -521,12 +743,81 @@ class PersonalOffice:
                     status="failed",
                     summary=f"The chief of staff stopped: {exc}",
                 )
-                self.store.set_agent_state("chief_of_staff", "idle", "")
+                self._presence("chief_of_staff", "idle", "")
+
+    def _run_overall(self, mission: dict[str, Any]) -> None:
+        """Top-level chief: one briefing per world, no specialist mix."""
+        mission_id = mission["id"]
+        request = mission["request"]
+        self._presence(
+            "chief_of_staff",
+            "working",
+            "Reading across worlds",
+            world_id=OVERALL,
+        )
+        self.store.update_mission(mission_id, status="running")
+        lines = ["## Across worlds", ""]
+        if self.store.match_world(request) is None:
+            lines.append(
+                "Name a world when the work belongs to one business. "
+                "Here is the combined picture."
+            )
+            lines.append("")
+        for world in self.store.list_worlds():
+            desk = self._google_for(world["id"])
+            try:
+                snap = desk.snapshot("")
+            except Exception:
+                logger.debug("World briefing failed", exc_info=True)
+                snap = {"connected": False}
+            text = desk.briefing_text(snap) if snap.get("connected") else ""
+            lines.append(f"### {world['name']}")
+            lines.append(text or "No mail connected for this world.")
+            goals = self.store.list_goals(world["id"])
+            if goals:
+                lines.append("")
+                lines.append("Goals:")
+                for goal in goals[:6]:
+                    lines.append(f"- {goal['title']}")
+            lines.append("")
+        body = "\n".join(lines).strip()
+        self.store.add_deliverable(
+            mission_id=mission_id,
+            task_id="",
+            specialist_id="chief_of_staff",
+            title="Across worlds",
+            kind="briefing",
+            body=body,
+            world_id=OVERALL,
+        )
+        self._presence(
+            "chief_of_staff",
+            "done",
+            "Combined the worlds",
+            world_id=OVERALL,
+        )
+        self.store.update_mission(
+            mission_id,
+            status="completed",
+            summary=body,
+            plan=[],
+            workflow={},
+        )
 
     def _run_locked(self, mission: dict[str, Any]) -> None:
         mission_id = mission["id"]
         request = mission["request"]
-        self.store.set_agent_state(
+        world_id = mission.get("world_id") or self._personal_id()
+        self._turn = {
+            "eli5": self.eli5_enabled(),
+            "command": None,
+            "world_id": world_id,
+            "google": {},
+        }
+        if world_id == OVERALL:
+            self._run_overall(mission)
+            return
+        self._presence(
             "chief_of_staff",
             "working",
             "Breaking the request into tasks",
@@ -538,7 +829,7 @@ class PersonalOffice:
             self.hermes_model, fallback, available, engine_ok
         )
         configured = resolve_configured_model(fallback, available, engine_ok)
-        agents = self._agent_choices(executive, configured)
+        agents = self._agent_choices(executive, configured, world_id=world_id)
         planner_choice = agents.get("chief_of_staff", configured)
         choices = {
             "executive_assistant": agents["executive_assistant"],
@@ -546,30 +837,34 @@ class PersonalOffice:
             "agents": agents,
         }
         command = find_command(request, self._loaded_commands())
+        desk = self._google_for(world_id)
+        roster = self._enabled_roster(world_id)
         self._turn = {
             "eli5": self.eli5_enabled(),
             "command": command,
-            "google": self._google_snapshot(request),
+            "google": self._google_snapshot(request, desk),
+            "world_id": world_id,
+            "desk": desk,
         }
         planned = None
         planner_source = "offline"
         if command is not None:
-            planned = plan_request(request, command=command)
+            planned = plan_request(request, roster, command=command)
             planner_source = "superclaude"
         elif planner_choice.source != "offline":
-            worker_ids = ", ".join(
-                spec.id for spec in list_specialists(include_chief=False)
-            )
+            worker_ids = ", ".join(spec.id for spec in roster)
             raw_plan = self._generate(
                 planner_choice,
                 "chief_of_staff",
                 _PLAN_INSTRUCTION.format(ids=worker_ids) + f"\n\nRequest:\n{request}",
             )
-            planned = plan_from_model_text(raw_plan or "", request=request)
+            planned = plan_from_model_text(
+                raw_plan or "", request=request, specialists=roster
+            )
             if planned:
                 planner_source = planner_choice.source
         if not planned:
-            planned = plan_request(request)
+            planned = plan_request(request, roster)
             planner_source = "offline"
         plan_rows = [item.to_dict() for item in planned]
         self.store.update_mission(
@@ -595,7 +890,7 @@ class PersonalOffice:
             )
             row["project_id"] = project_id
             tasks.append(row)
-        self.store.set_agent_state(
+        self._presence(
             "chief_of_staff",
             "working",
             f"Delegating {len(tasks)} task{'s' if len(tasks) != 1 else ''}",
@@ -609,7 +904,7 @@ class PersonalOffice:
             except Exception:
                 self.store.update_task(node.id, status="failed")
                 spec_id = by_id[node.id]["specialist_id"]
-                self.store.set_agent_state(spec_id, "idle", "Could not finish")
+                self._presence(spec_id, "idle", "Could not finish")
                 raise
 
         engine = DelegationEngine(runner, bus=self.bus, max_parallel=4)
@@ -650,18 +945,18 @@ class PersonalOffice:
         status = "completed" if done_count else "failed"
         if done_count:
             noun = "deliverable" if len(deliverables) == 1 else "deliverables"
-            self.store.set_agent_state(
+            self._presence(
                 "chief_of_staff",
                 "done",
                 f"Collected {len(deliverables)} {noun}",
             )
         else:
-            self.store.set_agent_state(
+            self._presence(
                 "chief_of_staff",
                 "idle",
                 "Delegation did not finish",
             )
-        self._file_proposals(request, mission_id)
+        self._file_proposals(request, mission_id, world_id)
         self.store.update_mission(
             mission_id,
             status=status,
@@ -701,20 +996,22 @@ class PersonalOffice:
     ) -> str:
         spec = get_specialist(task["specialist_id"])
         choice = self._choice_for(spec.id, choices)
-        self.store.set_agent_state(spec.id, "working", task["title"])
+        self._presence(spec.id, "working", task["title"])
         a2a = A2ATask(
             input_text=task["brief"],
             metadata={"specialist": spec.id, "mission_id": task["mission_id"]},
         )
         a2a.state = TaskState.WORKING
         self.store.update_task(task["id"], status="working", a2a=a2a.to_dict())
-        hits = self._recall(request)
+        world_id = str(self._turn.get("world_id") or self._personal_id())
+        hits = self._recall(request, world_id)
         snap = self._turn.get("google") or {}
+        desk = self._turn.get("desk") or self._google_for(world_id)
         briefing = ""
         if spec.id == "executive_assistant":
-            briefing = self.google.briefing_text(snap)
+            briefing = desk.briefing_text(snap)
         if spec.id == "second_brain":
-            saved = self._save_drive_docs(snap.get("files") or [])
+            saved = self._save_drive_docs(snap.get("files") or [], world_id)
             for note in saved:
                 hits.insert(0, note["body"])
         memory_block = ""
@@ -735,7 +1032,7 @@ class PersonalOffice:
                 brief=task["brief"],
                 model_text=model_text,
                 memory_hits=hits,
-                goals=self.store.list_goals(),
+                goals=self.store.list_goals(world_id),
                 eli5=bool(self._turn.get("eli5")),
                 persona_note=getattr(command, "instructions", "") or "",
                 google_briefing=briefing,
@@ -748,18 +1045,20 @@ class PersonalOffice:
                 target=produced.goal.get("target") or "Completed",
                 deadline=produced.goal.get("deadline"),
                 project_id=project_id or None,
+                world_id=world_id,
             )
         if produced.note:
             self.capture_note(
                 produced.note["title"],
                 produced.note["body"],
                 tags=produced.note.get("tags") or "",
+                world_id=world_id,
             )
         body = produced.body
         if briefing and model_text:
             body = f"{body.rstrip()}\n\n{briefing}"
         assets: list[dict[str, Any]] = []
-        if produced.visual_prompt:
+        if produced.visual_prompt and self._higgsfield_on(world_id, spec.id):
             assets = self.higgsfield.illustrate(
                 produced.visual_prompt,
                 video=produced.want_video,
@@ -774,6 +1073,7 @@ class PersonalOffice:
             body=body,
             model_id=model_id,
             model_source=source,
+            world_id=world_id,
         )
         for asset in assets:
             self.store.add_media(deliverable["id"], asset)
@@ -785,31 +1085,58 @@ class PersonalOffice:
             output=body,
             a2a=a2a.to_dict(),
         )
-        self.store.set_agent_state(spec.id, "done", produced.title)
+        self._presence(spec.id, "done", produced.title)
         del node, deliverable
         return body
 
-    def _recall(self, query: str) -> list[str]:
-        hits = [note["body"] for note in self.store.search_notes(query, limit=3)]
-        for hit in self.memory.search(query, top_k=3):
+    def _recall(self, query: str, world_id: str | None = None) -> list[str]:
+        scope = world_id or self._personal_id() or None
+        hits = [
+            note["body"]
+            for note in self.store.search_notes(query, limit=3, world_id=scope)
+        ]
+        for hit in self.memory.search(query, top_k=3, world_id=scope):
             if hit not in hits:
                 hits.append(hit)
         return hits[:5]
 
     # -- views ---------------------------------------------------------------
 
-    def roster(self) -> list[dict[str, Any]]:
-        states = self.store.agent_states()
-        choices = self.model_choices()
+    def roster(self, world_id: str | None = None) -> list[dict[str, Any]]:
+        if world_id:
+            states = self.store.scoped_states(world_id)
+            available, engine_ok = self._probe_engine()
+            fallback = self._fallback_id()
+            executive = resolve_executive_model(
+                self.hermes_model, fallback, available, engine_ok
+            )
+            configured = resolve_configured_model(fallback, available, engine_ok)
+            routed = self._agent_choices(executive, configured, world_id=world_id)
+            choices = {
+                "executive_assistant": routed["executive_assistant"].to_dict(),
+                "configured": routed.get("marketing_content", configured).to_dict(),
+                "agents": {key: choice.to_dict() for key, choice in routed.items()},
+            }
+            team = {row["specialist_id"]: row for row in self.store.team(world_id)}
+        else:
+            states = self.store.agent_states()
+            choices = self.model_choices()
+            team = {}
         agents = []
         for spec in list_specialists():
             state = states.get(spec.id, {})
             row = spec.to_dict()
             row["status"] = state.get("status") or "idle"
             row["current_work"] = state.get("current_work") or ""
-            routed = choices.get("agents") or {}
-            if spec.id in routed:
-                row["model"] = routed[spec.id]
+            member = team.get(spec.id) or {}
+            row["enabled"] = bool(member.get("enabled", True))
+            row["higgsfield_enabled"] = bool(
+                member.get("higgsfield", spec.id == "marketing_content")
+            )
+            row["omniroute_model"] = member.get("omniroute_model") or ""
+            routed_models = choices.get("agents") or {}
+            if spec.id in routed_models:
+                row["model"] = routed_models[spec.id]
             elif spec.prefers_hermes:
                 row["model"] = choices["executive_assistant"]
             else:
@@ -817,8 +1144,40 @@ class PersonalOffice:
             agents.append(row)
         return agents
 
-    def world(self) -> dict[str, Any]:
-        mission = self.store.latest_mission()
+    def world(self, world_id: str | None = None, *, scope: str = "") -> dict[str, Any]:
+        if scope == "all":
+            return self._archipelago()
+        return self._habitat(world_id)
+
+    def _archipelago(self) -> dict[str, Any]:
+        chief = self.store.scoped_states(OVERALL).get("chief_of_staff", {})
+        return {
+            "scope": "all",
+            "worlds": self.list_worlds(),
+            "projects": [],
+            "agents": [],
+            "edges": [],
+            "works": [],
+            "mission": self.store.latest_mission(OVERALL),
+            "chief": {
+                "id": "chief_of_staff",
+                "name": "Chief of Staff",
+                "status": chief.get("status") or "idle",
+                "current_work": chief.get("current_work") or "",
+            },
+            "hermes": self.model_choices()["executive_assistant"],
+            "eli5": self.eli5_enabled(),
+            "higgsfield": self.higgsfield.public_status(),
+            "omniroute": self.omniroute.public_status(),
+            "google": self.google.public_status(),
+            "phone": self.phone_status(),
+            "commands": [
+                item.to_dict() for item in list_commands(self._loaded_commands())
+            ],
+        }
+
+    def _habitat(self, world_id: str | None = None) -> dict[str, Any]:
+        mission = self.store.latest_mission(world_id)
         edges: list[dict[str, Any]] = []
         if mission is not None:
             for task in self.store.tasks_for(mission["id"]):
@@ -831,7 +1190,7 @@ class PersonalOffice:
                         "task_id": task["id"],
                     }
                 )
-        projects = self.project_board()
+        projects = self.project_board(world_id)
         works: list[dict[str, Any]] = []
         for project in projects:
             for task in project.get("tasks") or []:
@@ -843,8 +1202,31 @@ class PersonalOffice:
                         "title": task["title"],
                     }
                 )
+        meta = self.store.get_world(world_id) if world_id else None
+        desk = self._google_for(world_id) if world_id else self.google
         return {
-            "agents": self.roster(),
+            "scope": "world" if world_id else "habitat",
+            "world": (
+                {
+                    "id": meta["id"],
+                    "name": meta["name"],
+                    "kind": meta["kind"],
+                    "summary": meta.get("summary") or "",
+                    "accent": meta.get("accent") or "",
+                }
+                if meta
+                else None
+            ),
+            "team": self.store.team(world_id) if world_id else [],
+            "accounts": (
+                [
+                    self._public_account(account)
+                    for account in self.store.list_google_accounts(world_id)
+                ]
+                if world_id
+                else []
+            ),
+            "agents": self.roster(world_id),
             "edges": edges,
             "works": works,
             "projects": projects,
@@ -853,7 +1235,7 @@ class PersonalOffice:
             "eli5": self.eli5_enabled(),
             "higgsfield": self.higgsfield.public_status(),
             "omniroute": self.omniroute.public_status(),
-            "google": self.google.public_status(),
+            "google": desk.public_status(),
             "phone": self.phone_status(),
             "commands": [
                 item.to_dict() for item in list_commands(self._loaded_commands())
@@ -881,19 +1263,60 @@ class PersonalOffice:
             notes=self._phone_notes,
         )
 
-    def briefing(self) -> dict[str, Any]:
-        snap = self.google.snapshot("")
+    def briefing(self, world_id: str | None = None) -> dict[str, Any]:
+        if not world_id:
+            sections = []
+            texts = []
+            for world in self.store.list_worlds():
+                desk = self._google_for(world["id"])
+                snap = desk.snapshot("")
+                text = desk.briefing_text(snap)
+                sections.append(
+                    {
+                        "id": world["id"],
+                        "name": world["name"],
+                        "inbox": snap.get("inbox") or [],
+                        "meetings": snap.get("meetings") or [],
+                        "text": text,
+                        "connected": bool(snap.get("connected")),
+                    }
+                )
+                heading = f"## {world['name']}"
+                texts.append(
+                    f"{heading}\n{text}" if text else f"{heading}\nNo mail connected."
+                )
+            return {
+                "scope": "all",
+                "connected": any(section["connected"] for section in sections),
+                "worlds": sections,
+                "inbox": [],
+                "meetings": [],
+                "text": "\n\n".join(texts),
+                "google": self.google.public_status(),
+            }
+        desk = self._google_for(world_id)
+        snap = desk.snapshot("")
         return {
+            "scope": "world",
             "connected": bool(snap.get("connected")),
+            "worlds": [],
             "inbox": snap.get("inbox") or [],
             "meetings": snap.get("meetings") or [],
-            "text": self.google.briefing_text(snap),
-            "google": self.google.public_status(),
+            "text": desk.briefing_text(snap),
+            "google": desk.public_status(),
         }
 
-    def pull_drive(self, query: str) -> dict[str, Any]:
-        snap = self.google.snapshot(query)
-        notes = self._save_drive_docs(snap.get("files") or [])
+    def pull_drive(self, query: str, world_id: str | None = None) -> dict[str, Any]:
+        if not world_id:
+            return {
+                "connected": False,
+                "files": [],
+                "notes": [],
+                "detail": "Open a world before pulling Drive docs.",
+            }
+        desk = self._google_for(world_id)
+        snap = desk.snapshot(query)
+        notes = self._save_drive_docs(snap.get("files") or [], world_id)
         files = [
             {"name": item.get("name") or "", "link": item.get("link") or ""}
             for item in (snap.get("files") or [])
@@ -902,6 +1325,7 @@ class PersonalOffice:
             "connected": bool(snap.get("connected")),
             "files": files,
             "notes": notes,
+            "detail": "" if snap.get("connected") else "Google Drive is not connected.",
         }
 
     def approve_proposal(self, proposal_id: str) -> dict[str, Any]:
@@ -913,12 +1337,15 @@ class PersonalOffice:
             return row
         from openjarvis.personal import google_actions
 
+        payload = row.get("payload") or {}
+        path = self.google.credentials_path
+        account_id = str(payload.get("account_id") or "")
+        if account_id:
+            account = self.store.get_google_account(account_id)
+            if account and account.get("credentials_path"):
+                path = account["credentials_path"]
         try:
-            detail = google_actions.fulfill(
-                row["kind"],
-                row["payload"],
-                self.google.credentials_path,
-            )
+            detail = google_actions.fulfill(row["kind"], payload, path)
         except PermissionError as exc:
             detail = str(exc)
         except Exception as exc:
@@ -950,24 +1377,38 @@ class PersonalOffice:
         assert updated is not None
         return updated
 
-    def _google_snapshot(self, request: str) -> dict[str, Any]:
+    def _google_snapshot(
+        self, request: str, desk: GoogleDesk | ScopedGoogle | None = None
+    ) -> dict[str, Any]:
+        reader = desk or self.google
         try:
-            return self.google.snapshot(request)
+            return reader.snapshot(request)
         except Exception:
             logger.debug("Google snapshot failed", exc_info=True)
             return {"connected": False, "inbox": [], "meetings": [], "files": []}
 
-    def _file_proposals(self, request: str, mission_id: str) -> None:
+    def _file_proposals(self, request: str, mission_id: str, world_id: str) -> None:
+        accounts = self.store.list_google_accounts(world_id) if world_id else []
+        account_id = accounts[0]["id"] if accounts else ""
         for draft in drafts_for(request):
+            payload = dict(draft["payload"])
+            if account_id:
+                payload["account_id"] = account_id
             self.store.add_proposal(
                 kind=draft["kind"],
                 title=draft["title"],
-                payload=draft["payload"],
+                payload=payload,
                 mission_id=mission_id,
+                world_id=world_id,
             )
 
-    def _save_drive_docs(self, docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        existing = {note["title"] for note in self.store.list_notes(limit=200)}
+    def _save_drive_docs(
+        self, docs: list[dict[str, Any]], world_id: str = ""
+    ) -> list[dict[str, Any]]:
+        scope = world_id or self._personal_id()
+        existing = {
+            note["title"] for note in self.store.list_notes(limit=200, world_id=scope)
+        }
         saved = []
         for doc in docs[:3]:
             name = (doc.get("name") or "Untitled").strip()
@@ -975,7 +1416,11 @@ class PersonalOffice:
             body = (doc.get("text") or "").strip()
             if not body or title in existing:
                 continue
-            saved.append(self.capture_note(title, body, tags="drive,second-brain"))
+            saved.append(
+                self.capture_note(
+                    title, body, tags="drive,second-brain", world_id=scope
+                )
+            )
             existing.add(title)
         return saved
 
@@ -1014,11 +1459,11 @@ class PersonalOffice:
                 found = project
         return found
 
-    def project_board(self) -> list[dict[str, Any]]:
+    def project_board(self, world_id: str | None = None) -> list[dict[str, Any]]:
         """Projects with the goals and tasks living on them."""
-        goals = self.list_goals()
+        goals = self.list_goals(world_id)
         board = []
-        for project in self.store.list_projects():
+        for project in self.store.list_projects(world_id):
             row = dict(project)
             row["goals"] = [
                 goal for goal in goals if goal.get("project_id") == project["id"]
@@ -1026,7 +1471,7 @@ class PersonalOffice:
             row["tasks"] = self.store.tasks_for_project(project["id"])
             board.append(row)
         loose_goals = [goal for goal in goals if not goal.get("project_id")]
-        mission = self.store.latest_mission()
+        mission = self.store.latest_mission(world_id)
         loose_tasks: list[dict[str, Any]] = []
         if mission is not None and not mission.get("project_id"):
             loose_tasks = self.store.tasks_for(mission["id"])

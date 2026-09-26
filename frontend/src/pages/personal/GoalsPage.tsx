@@ -9,11 +9,12 @@ import {
   type Goal,
   type ProjectPlot,
 } from '../../lib/personal-api';
-import { OsError, OsShell, useEli5 } from './Shell';
+import { OsError, OsShell, useDeskWorld, useEli5 } from './Shell';
 import './personal.css';
 
 export function GoalsPage() {
   const eli5 = useEli5();
+  const deskWorld = useDeskWorld();
   const [goals, setGoals] = useState<Goal[]>([]);
   const [projects, setProjects] = useState<ProjectPlot[]>([]);
   const [checkins, setCheckins] = useState(0);
@@ -25,19 +26,19 @@ export function GoalsPage() {
   const [busy, setBusy] = useState(false);
 
   const refresh = () => {
-    fetchGoals()
+    fetchGoals(deskWorld)
       .then((data) => {
         setGoals(data.goals);
         setCheckins(data.checkins.length);
         setError('');
       })
       .catch((err: Error) => setError(err.message));
-    fetchProjects().then((data) => setProjects(data.projects.filter((item) => item.id))).catch(() => {});
+    fetchProjects(deskWorld).then((data) => setProjects(data.projects.filter((item) => item.id))).catch(() => {});
   };
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [deskWorld]);
 
   const onCreate = async (event: FormEvent) => {
     event.preventDefault();
@@ -49,6 +50,7 @@ export function GoalsPage() {
         target: target.trim() || 'Completed',
         deadline: deadline ? `${deadline}T23:59:59+00:00` : null,
         project_id: projectId || null,
+        world_id: deskWorld,
       });
       setTitle('');
       setTarget('');
@@ -115,7 +117,10 @@ export function GoalsPage() {
             <div className="goal-top">
               <div>
                 <h2>{goal.title}</h2>
-                <p className="muted">Target: {goal.target || 'Completed'}{goal.deadline ? ` · due ${goal.deadline.slice(0, 10)}` : ''}</p>
+                <p className="muted">
+                  {!deskWorld && goal.world_name ? `${goal.world_name} · ` : ''}
+                  Target: {goal.target || 'Completed'}{goal.deadline ? ` · due ${goal.deadline.slice(0, 10)}` : ''}
+                </p>
               </div>
               <span className={`pace ${goal.on_track}`}>{goal.pace}</span>
             </div>

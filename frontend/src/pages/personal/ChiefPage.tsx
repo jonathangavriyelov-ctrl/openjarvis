@@ -19,7 +19,7 @@ import {
   type PhoneStatus,
   type Proposal,
 } from '../../lib/personal-api';
-import { OsError, OsShell, useEli5 } from './Shell';
+import { OsError, OsShell, useDeskWorld, useEli5 } from './Shell';
 import './personal.css';
 
 const COLUMNS = [
@@ -42,6 +42,7 @@ function visibleBrief(brief: string) {
 
 export function ChiefPage() {
   const eli5 = useEli5();
+  const deskWorld = useDeskWorld();
   const [request, setRequest] = useState('');
   const [mission, setMission] = useState<Mission | null>(null);
   const [history, setHistory] = useState<Mission[]>([]);
@@ -53,26 +54,29 @@ export function ChiefPage() {
   const [sending, setSending] = useState(false);
 
   const refreshDesk = () => {
-    fetchBriefing().then(setBriefing).catch(() => {});
+    fetchBriefing(deskWorld).then(setBriefing).catch(() => {});
     fetchProposals().then((data) => setProposals(data.proposals)).catch(() => {});
     fetchPhone().then(setPhone).catch(() => {});
   };
 
   const refreshHistory = () => {
-    fetchMissions().then((data) => setHistory(data.missions)).catch(() => {});
+    fetchMissions(deskWorld).then((data) => setHistory(data.missions)).catch(() => {});
   };
 
   useEffect(() => {
-    fetchMissions()
+    fetchMissions(deskWorld)
       .then((data) => {
         setHistory(data.missions);
         const latest = data.missions[0];
         if (latest) {
           fetchMission(latest.id).then(setMission).catch(() => {});
+        } else {
+          setMission(null);
         }
       })
       .catch(() => {});
-  }, []);
+    refreshDesk();
+  }, [deskWorld]);
 
   useEffect(() => {
     fetchSettings().then((settings) => setCommands(settings.commands)).catch(() => {});
@@ -102,7 +106,10 @@ export function ChiefPage() {
     setSending(true);
     setError('');
     try {
-      const created = await submitMission(text);
+      const created = await submitMission(text, {
+        worldId: deskWorld,
+        scope: deskWorld ? 'auto' : 'route',
+      });
       setMission(created);
       setRequest('');
     } catch (err) {
@@ -157,11 +164,33 @@ export function ChiefPage() {
       <div className="os-grid" style={{ marginTop: 16 }}>
         <section className="os-card">
           <h2>{eli5 ? 'Mail and meetings' : 'Inbox and calendar'}</h2>
-          <p className="muted">{briefing?.google.detail || 'Google is not connected.'}</p>
+          <p className="muted">
+            {deskWorld
+              ? briefing?.google.detail || 'Google is not connected.'
+              : 'Combined briefing. Name a world when the work belongs to one business.'}
+          </p>
+          {(briefing?.worlds?.length ?? 0) > 0 && !deskWorld && (
+            <div className="stack">
+              {briefing?.worlds?.map((section) => (
+                <div key={section.id}>
+                  <strong>{section.name}</strong>
+                  <p className="muted">{section.connected ? 'Mail connected.' : 'No mail connected for this world.'}</p>
+                  {section.inbox.slice(0, 3).map((item) => (
+                    <p key={`${section.id}-${item.subject}`} className="muted">
+                      {item.account ? `${item.account}: ` : ''}
+                      <strong>{item.subject}</strong>
+                      {item.from ? ` — ${item.from}` : ''}
+                    </p>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
           {(briefing?.inbox.length ?? 0) > 0 && (
             <ul className="muted" style={{ paddingLeft: 18 }}>
               {briefing?.inbox.slice(0, 5).map((item) => (
-                <li key={`${item.from}-${item.subject}`}>
+                <li key={`${item.account || ''}-${item.from}-${item.subject}`}>
+                  {item.account ? `${item.account}: ` : ''}
                   <strong>{item.subject}</strong>
                   {item.from ? ` — ${item.from}` : ''}
                 </li>

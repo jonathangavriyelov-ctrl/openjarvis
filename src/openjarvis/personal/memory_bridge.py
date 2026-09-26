@@ -25,19 +25,29 @@ class MemoryBridge:
     def store(self, content: str, metadata: dict[str, Any] | None = None) -> str:
         if self.backend is None or not content.strip():
             return ""
+        meta = dict(metadata or {})
+        meta.setdefault("source", MEMORY_SOURCE)
+        world_id = str(meta.get("world_id") or "")
+        stored = f"world:{world_id}\n{content}" if world_id else content
         try:
             return str(
                 self.backend.store(
-                    content,
+                    stored,
                     source=MEMORY_SOURCE,
-                    metadata=metadata or {"source": MEMORY_SOURCE},
+                    metadata=meta,
                 )
             )
         except Exception:
             logger.debug("Second brain memory store failed", exc_info=True)
             return ""
 
-    def search(self, query: str, top_k: int = 5) -> list[str]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        *,
+        world_id: str | None = None,
+    ) -> list[str]:
         if self.backend is None or not query.strip():
             return []
         try:
@@ -46,10 +56,19 @@ class MemoryBridge:
             logger.debug("Second brain memory search failed", exc_info=True)
             return []
         hits: list[str] = []
+        prefix = f"world:{world_id}\n" if world_id else ""
         for item in results or []:
             content = getattr(item, "content", None)
             if content is None and isinstance(item, dict):
                 content = item.get("content")
-            if content:
-                hits.append(str(content))
+            if not content:
+                continue
+            text = str(content)
+            if world_id:
+                if text.startswith(prefix):
+                    hits.append(text[len(prefix) :])
+                elif not text.startswith("world:"):
+                    continue
+            else:
+                hits.append(text)
         return hits

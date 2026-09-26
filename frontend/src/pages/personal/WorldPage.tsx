@@ -1,16 +1,22 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
 import {
+  connectAccount,
   createProject,
+  createWorld,
   deleteProject,
+  deleteWorld,
+  disconnectAccount,
   fetchWorld,
   routeLabel,
   statusLabel,
   updateProject,
+  updateTeamMember,
+  updateWorld,
   type ProjectPlot,
   type WorldSnapshot,
 } from '../../lib/personal-api';
-import { OsError, OsShell, useEli5 } from './Shell';
+import { OsError, OsShell, setDeskWorld, useDeskWorld, useEli5 } from './Shell';
 import './personal.css';
 
 const AGENT_SPOTS: Record<string, { x: number; y: number }> = {
@@ -35,9 +41,15 @@ function plotSpot(index: number, count: number) {
   return start + (index * span) / (count - 1);
 }
 
+function planetSpot(index: number, count: number) {
+  const angle = -Math.PI / 2 + (index * 2 * Math.PI) / Math.max(count, 1);
+  return { x: 50 + Math.cos(angle) * 32, y: 48 + Math.sin(angle) * 30 };
+}
+
 export function WorldPage() {
   const navigate = useNavigate();
   const eli5 = useEli5();
+  const deskWorld = useDeskWorld();
   const [world, setWorld] = useState<WorldSnapshot | null>(null);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
@@ -45,11 +57,18 @@ export function WorldPage() {
   const [summary, setSummary] = useState('');
   const [freshName, setFreshName] = useState('');
   const [freshSummary, setFreshSummary] = useState('');
+  const [worldName, setWorldName] = useState('');
+  const [worldSummary, setWorldSummary] = useState('');
+  const [accountEmail, setAccountEmail] = useState('');
+  const [accountPath, setAccountPath] = useState('');
 
   useEffect(() => {
     let stop = false;
     const pull = () => {
-      fetchWorld()
+      const request = deskWorld
+        ? fetchWorld({ worldId: deskWorld })
+        : fetchWorld({ scope: 'all' });
+      request
         .then((data) => {
           if (!stop) {
             setWorld(data);
@@ -66,7 +85,7 @@ export function WorldPage() {
       stop = true;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [deskWorld]);
 
   const projects = world?.projects ?? [];
   const agents = world?.agents ?? [];
@@ -82,33 +101,139 @@ export function WorldPage() {
     if (!editing || !name.trim()) return;
     await updateProject(editing, { name: name.trim(), summary: summary.trim() });
     setEditing(null);
-    const next = await fetchWorld();
-    setWorld(next);
+    await reload();
   };
 
   const removeProject = async (id: string) => {
     await deleteProject(id);
     setEditing(null);
-    setWorld(await fetchWorld());
+    await reload();
   };
 
   const addProject = async (event: FormEvent) => {
     event.preventDefault();
     if (!freshName.trim()) return;
-    await createProject({ name: freshName.trim(), summary: freshSummary.trim() });
+    await createProject({
+      name: freshName.trim(),
+      summary: freshSummary.trim(),
+      world_id: deskWorld,
+    });
     setFreshName('');
     setFreshSummary('');
-    setWorld(await fetchWorld());
+    await reload();
   };
+
+  const reload = async () => {
+    setWorld(await fetchWorld(deskWorld ? { worldId: deskWorld } : { scope: 'all' }));
+  };
+
+  if (!deskWorld) {
+    const planets = world?.worlds ?? [];
+    return (
+      <OsShell
+        eyebrow={eli5 ? 'YOUR PLACES' : 'WORLDS'}
+        title={eli5 ? 'All your worlds' : 'Archipelago'}
+        lede={
+          eli5
+            ? 'Each planet is a life or a business. The helper in the middle can see all of them. Tap a planet to go inside.'
+            : 'Each planet is a world with its own mail, projects, and team. The chief in the center connects them. Open a planet to work inside it.'
+        }
+      >
+        {error && <OsError message={error} />}
+        <section className="world archipelago" aria-label="Worlds">
+          <div className="world-sky" />
+          <svg className="world-flows" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            {planets.map((planet, index) => {
+              const spot = planetSpot(index, planets.length);
+              return (
+                <line
+                  key={planet.id}
+                  x1={50}
+                  y1={48}
+                  x2={spot.x}
+                  y2={spot.y}
+                  className="world-flow is-done"
+                />
+              );
+            })}
+          </svg>
+          <button
+            type="button"
+            className={`organism is-chief is-${world?.chief?.status || 'idle'}`}
+            style={{ left: '50%', top: '48%' }}
+            onClick={() => navigate('/os/chief')}
+          >
+            <span className="organism-pulse" />
+            <strong>{eli5 ? 'The boss helper' : 'Chief of Staff'}</strong>
+            <em>{world?.chief?.current_work || (eli5 ? 'Watches every world' : 'Routes across worlds')}</em>
+          </button>
+          {planets.map((planet, index) => {
+            const spot = planetSpot(index, planets.length);
+            return (
+              <button
+                key={planet.id}
+                type="button"
+                className="planet"
+                style={{ left: `${spot.x}%`, top: `${spot.y}%`, borderColor: planet.accent }}
+                onClick={() => setDeskWorld(planet.id)}
+              >
+                <span className="planet-glow" style={{ background: planet.accent }} />
+                <strong>{planet.name}</strong>
+                <em>{planet.kind === 'personal' ? 'Personal' : 'Business'}</em>
+                <small>
+                  {planet.project_count} projects · {planet.goal_count} goals · {planet.agent_count} agents
+                </small>
+              </button>
+            );
+          })}
+        </section>
+        <section className="panel">
+          <div className="panel-head">
+            <h2>{eli5 ? 'Add a business' : 'New world'}</h2>
+          </div>
+          <form
+            className="project-form"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              if (!worldName.trim()) return;
+              const created = await createWorld({
+                name: worldName.trim(),
+                summary: worldSummary.trim(),
+              });
+              setWorldName('');
+              setWorldSummary('');
+              setDeskWorld(created.id);
+            }}
+          >
+            <label>
+              Name
+              <input value={worldName} onChange={(event) => setWorldName(event.target.value)} placeholder="Studio name" />
+            </label>
+            <label>
+              What it is
+              <input value={worldSummary} onChange={(event) => setWorldSummary(event.target.value)} />
+            </label>
+            <button className="os-primary" type="submit">Create world</button>
+          </form>
+        </section>
+      </OsShell>
+    );
+  }
 
   return (
     <OsShell
-      eyebrow={eli5 ? 'WHAT YOU ARE DOING' : 'HABITAT'}
-      title={eli5 ? 'Your world' : 'Eco world'}
+      eyebrow={world?.world?.kind === 'personal' ? 'PERSONAL' : 'BUSINESS'}
+      title={world?.world?.name || (eli5 ? 'Your world' : 'Eco world')}
       lede={
-        eli5
+        world?.world?.summary
+        || (eli5
           ? 'Each garden is a project. The plants are goals. The helpers stand on the project they are working on.'
-          : 'Projects are living plots. Goals grow on them, and the team is drawn onto the work they are doing right now.'
+          : 'Projects are living plots. Goals grow on them, and the team is drawn onto the work they are doing right now.')
+      }
+      action={
+        <button className="os-ghost" type="button" onClick={() => setDeskWorld(null)}>
+          {eli5 ? 'All worlds' : 'Back to worlds'}
+        </button>
       }
     >
       {error && <OsError message={error} />}
@@ -256,6 +381,159 @@ export function WorldPage() {
             />
           </label>
           <button className="os-primary" type="submit">Add</button>
+        </form>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>{eli5 ? 'This place' : 'World'}</h2>
+        </div>
+        <form
+          className="project-form"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            const nextName = (worldName || world?.world?.name || '').trim();
+            if (!deskWorld || !nextName) return;
+            await updateWorld(deskWorld, {
+              name: nextName,
+              summary: worldSummary || world?.world?.summary || '',
+            });
+            setWorldName('');
+            setWorldSummary('');
+            await reload();
+          }}
+        >
+          <label>
+            Rename
+            <input
+              value={worldName}
+              placeholder={world?.world?.name || 'Name'}
+              onChange={(event) => setWorldName(event.target.value)}
+            />
+          </label>
+          <label>
+            Summary
+            <input
+              value={worldSummary}
+              placeholder={world?.world?.summary || 'What this world is for'}
+              onChange={(event) => setWorldSummary(event.target.value)}
+            />
+          </label>
+          <button className="os-primary" type="submit">Save world</button>
+          {world?.world?.kind !== 'personal' && (
+            <button
+              className="os-ghost"
+              type="button"
+              onClick={async () => {
+                if (!deskWorld) return;
+                await deleteWorld(deskWorld);
+                setDeskWorld(null);
+              }}
+            >
+              Delete world
+            </button>
+          )}
+        </form>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>{eli5 ? 'Helpers here' : 'Team'}</h2>
+          <span className="muted">Each world can turn helpers on, pick an OmniRoute model, and choose who may use Higgsfield.</span>
+        </div>
+        <ul className="team-list">
+          {agents.map((agent) => (
+            <li key={agent.id}>
+              <strong>{agent.name}</strong>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={agent.enabled !== false}
+                  onChange={async (event) => {
+                    await updateTeamMember(deskWorld, agent.id, { enabled: event.target.checked });
+                    await reload();
+                  }}
+                />
+                On
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={Boolean(agent.higgsfield_enabled)}
+                  onChange={async (event) => {
+                    await updateTeamMember(deskWorld, agent.id, { higgsfield: event.target.checked });
+                    await reload();
+                  }}
+                />
+                Higgsfield
+              </label>
+              <input
+                className="os-field"
+                defaultValue={agent.omniroute_model || ''}
+                placeholder="OmniRoute model"
+                onBlur={async (event) => {
+                  if ((event.target.value || '') === (agent.omniroute_model || '')) return;
+                  await updateTeamMember(deskWorld, agent.id, { omniroute_model: event.target.value });
+                  await reload();
+                }}
+              />
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>{eli5 ? 'Mail for this world' : 'Google accounts'}</h2>
+          <span className="muted">Point at a credentials file that lives outside this repository.</span>
+        </div>
+        <ul className="team-list">
+          {(world?.accounts ?? []).map((account) => (
+            <li key={account.id}>
+              <strong>{account.email}</strong>
+              <span className="muted">{account.connected ? 'Connected' : 'Not connected'}</span>
+              <button
+                className="os-ghost"
+                type="button"
+                onClick={async () => {
+                  await disconnectAccount(deskWorld, account.id);
+                  await reload();
+                }}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+        <form
+          className="project-form"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (!accountEmail.trim()) return;
+            try {
+              await connectAccount(deskWorld, {
+                email: accountEmail.trim(),
+                credentials_path: accountPath.trim(),
+                label: accountEmail.trim(),
+              });
+              setAccountEmail('');
+              setAccountPath('');
+              setError('');
+              await reload();
+            } catch (err) {
+              setError(err instanceof Error ? err.message : 'Could not attach that account.');
+            }
+          }}
+        >
+          <label>
+            Email
+            <input value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} placeholder="you@company.com" />
+          </label>
+          <label>
+            Credentials file
+            <input value={accountPath} onChange={(event) => setAccountPath(event.target.value)} placeholder="/home/you/.openjarvis/google-business.json" />
+          </label>
+          <button className="os-primary" type="submit">Assign account</button>
         </form>
       </section>
     </OsShell>

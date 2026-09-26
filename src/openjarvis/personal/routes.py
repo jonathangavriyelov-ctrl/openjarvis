@@ -22,6 +22,8 @@ personal_router = APIRouter(prefix="/v1/personal", tags=["personal"])
 class MissionRequest(BaseModel):
     request: str = Field(..., min_length=1)
     project_id: Optional[str] = None
+    world_id: Optional[str] = None
+    scope: str = "auto"
 
 
 class GoalRequest(BaseModel):
@@ -30,6 +32,7 @@ class GoalRequest(BaseModel):
     deadline: Optional[str] = None
     progress: float = 0
     project_id: Optional[str] = None
+    world_id: Optional[str] = None
 
 
 class GoalUpdateRequest(BaseModel):
@@ -49,6 +52,7 @@ class ProjectRequest(BaseModel):
     name: str = Field(..., min_length=1)
     summary: str = ""
     accent: str = "#7dcea0"
+    world_id: Optional[str] = None
 
 
 class ProjectUpdateRequest(BaseModel):
@@ -65,14 +69,42 @@ class NoteRequest(BaseModel):
     title: str = ""
     body: str = Field(..., min_length=1)
     tags: str = ""
+    world_id: str = ""
 
 
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1)
+    world_id: str = ""
 
 
 class DrivePullRequest(BaseModel):
     query: str = Field(..., min_length=1)
+    world_id: str = ""
+
+
+class WorldRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+    summary: str = ""
+    accent: str = "#7dcea0"
+    kind: str = "business"
+
+
+class WorldUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    summary: Optional[str] = None
+    accent: Optional[str] = None
+
+
+class TeamUpdateRequest(BaseModel):
+    enabled: Optional[bool] = None
+    omniroute_model: Optional[str] = None
+    higgsfield: Optional[bool] = None
+
+
+class AccountRequest(BaseModel):
+    email: str = Field(..., min_length=1)
+    credentials_path: str = ""
+    label: str = ""
 
 
 def _first(*values: object) -> str:
@@ -202,9 +234,108 @@ def _goal_or_404(office: PersonalOffice, goal_id: str) -> dict[str, Any]:
 
 
 @personal_router.get("/world")
-def personal_world(request: Request) -> dict[str, Any]:
-    """Eco-world snapshot: who is here, what they are doing, who delegated."""
-    return _office_from_app(request).world()
+def personal_world(
+    request: Request, world_id: str = "", scope: str = ""
+) -> dict[str, Any]:
+    """Eco-world snapshot. scope=all is the archipelago; world_id zooms in."""
+    return _office_from_app(request).world(world_id or None, scope=scope)
+
+
+@personal_router.get("/worlds")
+def personal_worlds(request: Request) -> dict[str, Any]:
+    return {"worlds": _office_from_app(request).list_worlds()}
+
+
+@personal_router.post("/worlds")
+def personal_create_world(body: WorldRequest, request: Request) -> dict[str, Any]:
+    office = _office_from_app(request)
+    if body.kind == "personal":
+        raise HTTPException(
+            status_code=400, detail="The Personal world already exists."
+        )
+    try:
+        return office.create_world(
+            body.name,
+            summary=body.summary,
+            accent=body.accent,
+            kind=body.kind,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@personal_router.patch("/worlds/{world_id}")
+def personal_update_world(
+    world_id: str, body: WorldUpdateRequest, request: Request
+) -> dict[str, Any]:
+    world = _office_from_app(request).rename_world(
+        world_id, **body.model_dump(exclude_unset=True)
+    )
+    if world is None:
+        raise HTTPException(status_code=404, detail="World not found")
+    return world
+
+
+@personal_router.delete("/worlds/{world_id}")
+def personal_delete_world(world_id: str, request: Request) -> dict[str, Any]:
+    result = _office_from_app(request).delete_world(world_id)
+    if result == "personal":
+        raise HTTPException(status_code=400, detail="The Personal world stays.")
+    if result == "missing":
+        raise HTTPException(status_code=404, detail="World not found")
+    return {"deleted": True}
+
+
+@personal_router.get("/worlds/{world_id}/team")
+def personal_world_team(world_id: str, request: Request) -> dict[str, Any]:
+    office = _office_from_app(request)
+    if office.store.get_world(world_id) is None:
+        raise HTTPException(status_code=404, detail="World not found")
+    return {"team": office.world_team(world_id)}
+
+
+@personal_router.put("/worlds/{world_id}/team/{specialist_id}")
+def personal_update_team(
+    world_id: str,
+    specialist_id: str,
+    body: TeamUpdateRequest,
+    request: Request,
+) -> dict[str, Any]:
+    row = _office_from_app(request).update_world_team(
+        world_id, specialist_id, **body.model_dump(exclude_unset=True)
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Team member not found")
+    return row
+
+
+@personal_router.post("/worlds/{world_id}/accounts")
+def personal_add_account(
+    world_id: str, body: AccountRequest, request: Request
+) -> dict[str, Any]:
+    office = _office_from_app(request)
+    try:
+        return office.connect_google_account(
+            world_id,
+            email=body.email,
+            credentials_path=body.credentials_path,
+            label=body.label,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="World not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@personal_router.delete("/worlds/{world_id}/accounts/{account_id}")
+def personal_delete_account(
+    world_id: str, account_id: str, request: Request
+) -> dict[str, Any]:
+    del world_id
+    removed = _office_from_app(request).disconnect_google_account(account_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return {"deleted": True}
 
 
 @personal_router.get("/roster")
@@ -234,16 +365,21 @@ def personal_submit_mission(body: MissionRequest, request: Request) -> dict[str,
     """Hand a request to the chief of staff. Poll the mission until it settles."""
     office = _office_from_app(request)
     try:
-        mission = office.submit_mission(body.request, project_id=body.project_id)
+        mission = office.submit_mission(
+            body.request,
+            project_id=body.project_id,
+            world_id=body.world_id,
+            scope=body.scope or "auto",
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return mission
 
 
 @personal_router.get("/missions")
-def personal_list_missions(request: Request) -> dict[str, Any]:
+def personal_list_missions(request: Request, world_id: str = "") -> dict[str, Any]:
     office = _office_from_app(request)
-    return {"missions": office.store.list_missions()}
+    return {"missions": office.store.list_missions(world_id=world_id or None)}
 
 
 @personal_router.get("/missions/{mission_id}")
@@ -256,10 +392,10 @@ def personal_get_mission(mission_id: str, request: Request) -> dict[str, Any]:
 
 
 @personal_router.post("/checkin")
-def personal_checkin(request: Request) -> dict[str, Any]:
+def personal_checkin(request: Request, world_id: str = "") -> dict[str, Any]:
     """Ask the executive assistant for today's priorities against open goals."""
     office = _office_from_app(request)
-    goals = office.list_goals()
+    goals = office.list_goals(world_id or None)
     if goals:
         lines = [
             f"- {goal['title']} ({goal['pace']}, {int(goal['progress'])}%)"
@@ -272,13 +408,16 @@ def personal_checkin(request: Request) -> dict[str, Any]:
         "Daily check-in. Review Jonathan's goals and set today's three priorities.\n"
         f"{board}"
     )
-    return office.run_mission(prompt)
+    return office.run_mission(prompt, world_id=world_id or None)
 
 
 @personal_router.get("/goals")
-def personal_list_goals(request: Request) -> dict[str, Any]:
+def personal_list_goals(request: Request, world_id: str = "") -> dict[str, Any]:
     office = _office_from_app(request)
-    return {"goals": office.list_goals(), "checkins": office.store.list_checkins()}
+    return {
+        "goals": office.list_goals(world_id or None),
+        "checkins": office.store.list_checkins(),
+    }
 
 
 @personal_router.post("/goals")
@@ -291,6 +430,7 @@ def personal_create_goal(body: GoalRequest, request: Request) -> dict[str, Any]:
         deadline=body.deadline,
         progress=progress,
         project_id=body.project_id,
+        world_id=body.world_id,
     )
 
 
@@ -326,27 +466,35 @@ def personal_milestone(
 
 
 @personal_router.get("/deliverables")
-def personal_deliverables(request: Request, specialist_id: str = "") -> dict[str, Any]:
+def personal_deliverables(
+    request: Request, specialist_id: str = "", world_id: str = ""
+) -> dict[str, Any]:
     office = _office_from_app(request)
-    return {"deliverables": office.store.list_deliverables(specialist_id=specialist_id)}
+    return {
+        "deliverables": office.store.list_deliverables(
+            specialist_id=specialist_id, world_id=world_id or None
+        )
+    }
 
 
 @personal_router.get("/notes")
-def personal_notes(request: Request) -> dict[str, Any]:
+def personal_notes(request: Request, world_id: str = "") -> dict[str, Any]:
     office = _office_from_app(request)
-    return {"notes": office.store.list_notes()}
+    return {"notes": office.store.list_notes(world_id=world_id or None)}
 
 
 @personal_router.post("/notes")
 def personal_capture_note(body: NoteRequest, request: Request) -> dict[str, Any]:
     office = _office_from_app(request)
     title = body.title.strip() or body.body.strip().split("\n", 1)[0][:80]
-    return office.capture_note(title, body.body, tags=body.tags)
+    return office.capture_note(title, body.body, tags=body.tags, world_id=body.world_id)
 
 
 @personal_router.post("/notes/ask")
 def personal_ask(body: AskRequest, request: Request) -> dict[str, Any]:
-    return _office_from_app(request).ask_memory(body.question)
+    return _office_from_app(request).ask_memory(
+        body.question, world_id=body.world_id or None
+    )
 
 
 @personal_router.get("/settings")
@@ -363,15 +511,18 @@ def personal_update_settings(body: SettingsRequest, request: Request) -> dict[st
 
 
 @personal_router.get("/projects")
-def personal_projects(request: Request) -> dict[str, Any]:
-    return {"projects": _office_from_app(request).project_board()}
+def personal_projects(request: Request, world_id: str = "") -> dict[str, Any]:
+    return {"projects": _office_from_app(request).project_board(world_id or None)}
 
 
 @personal_router.post("/projects")
 def personal_create_project(body: ProjectRequest, request: Request) -> dict[str, Any]:
     office = _office_from_app(request)
     return office.store.create_project(
-        body.name, summary=body.summary, accent=body.accent
+        body.name,
+        summary=body.summary,
+        accent=body.accent,
+        world_id=body.world_id or office._personal_id(),
     )
 
 
@@ -398,9 +549,9 @@ def personal_delete_project(project_id: str, request: Request) -> dict[str, Any]
 
 
 @personal_router.get("/briefing")
-def personal_briefing(request: Request) -> dict[str, Any]:
+def personal_briefing(request: Request, world_id: str = "") -> dict[str, Any]:
     """Inbox and upcoming meetings. Empty when Google is not connected."""
-    return _office_from_app(request).briefing()
+    return _office_from_app(request).briefing(world_id or None)
 
 
 @personal_router.get("/proposals")
@@ -430,7 +581,9 @@ def personal_reject_proposal(proposal_id: str, request: Request) -> dict[str, An
 
 @personal_router.post("/drive/pull")
 def personal_drive_pull(body: DrivePullRequest, request: Request) -> dict[str, Any]:
-    return _office_from_app(request).pull_drive(body.query)
+    return _office_from_app(request).pull_drive(
+        body.query, world_id=body.world_id or None
+    )
 
 
 @personal_router.get("/phone")

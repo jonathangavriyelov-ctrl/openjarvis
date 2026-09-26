@@ -290,7 +290,7 @@ def test_telegram_allow_match_runs_the_mission(tmp_path):
         )
     )
     assert telegram.sent[0][0] == "42"
-    assert "Back from the team" in telegram.sent[0][1]
+    assert "Across worlds" in telegram.sent[0][1]
     slack.handlers[0](
         SimpleNamespace(sender="U2", conversation_id="C1", content="hello")
     )
@@ -303,5 +303,5 @@ def test_telegram_allow_match_runs_the_mission(tmp_path):
         )
     )
     assert slack.sent[0][0] == "C1"
-    assert "Back from the team" in slack.sent[0][1]
+    assert "Across worlds" in slack.sent[0][1]
     office.close()

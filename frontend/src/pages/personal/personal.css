@@ -268,6 +268,55 @@
   .spore, .organism, .world-flow { animation: none; }
 }
 .os-nav-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; }
+.world-switch { display: flex; flex-wrap: wrap; gap: 6px; }
+.world-switch button {
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.world-switch button.is-on {
+  color: var(--color-text);
+  background: var(--color-accent-subtle);
+}
+.archipelago { min-height: 560px; }
+.planet {
+  position: absolute;
+  width: min(220px, 34%);
+  transform: translate(-50%, -50%);
+  text-align: left;
+  color: #e9f7f4;
+  background: rgba(8, 18, 28, 0.82);
+  border: 1px solid rgba(180, 230, 220, 0.35);
+  border-radius: 999px;
+  padding: 18px 18px 16px;
+  cursor: pointer;
+}
+.planet strong { display: block; font-size: 15px; }
+.planet em, .planet small { display: block; font-style: normal; color: #c5ddd6; font-size: 11px; }
+.planet-glow {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  margin-bottom: 8px;
+  box-shadow: 0 0 16px currentColor;
+}
+.team-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 10px; }
+.team-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+.team-list .os-field { max-width: 240px; padding: 8px 10px; }
 .eli5-toggle {
   border: 1px solid var(--color-border);
   background: var(--color-bg-secondary);

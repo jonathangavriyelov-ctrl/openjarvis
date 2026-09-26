@@ -3,11 +3,12 @@ import { Link } from 'react-router';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { fetchDeliverables, fetchWorld, type Deliverable, type PersonalAgent } from '../../lib/personal-api';
-import { OsError, OsShell, useEli5 } from './Shell';
+import { OsError, OsShell, useDeskWorld, useEli5 } from './Shell';
 import './personal.css';
 
 export function DeliverablesPage() {
   const eli5 = useEli5();
+  const deskWorld = useDeskWorld();
   const [items, setItems] = useState<Deliverable[]>([]);
   const [agents, setAgents] = useState<PersonalAgent[]>([]);
   const [filter, setFilter] = useState('');
@@ -15,13 +16,13 @@ export function DeliverablesPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    fetchDeliverables(filter)
+    fetchDeliverables(filter, deskWorld)
       .then((data) => {
         setItems(data.deliverables);
         setError('');
       })
       .catch((err: Error) => setError(err.message));
-  }, [filter]);
+  }, [filter, deskWorld]);
 
   useEffect(() => {
     fetchWorld().then((world) => setAgents(world.agents)).catch(() => {});
