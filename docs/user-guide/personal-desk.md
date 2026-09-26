@@ -8,13 +8,21 @@ From the repo:
 make os
 ```
 
-That starts the API and the dashboard and prints the address, usually
-http://127.0.0.1:5173/os/world . The same command is `scripts/os-up.sh`.
-No API keys are required.
+That starts the API and the dashboard in the background, prints the address
+(usually http://127.0.0.1:5173/os/world), and returns. The same command is
+`scripts/os-up.sh`. The desk keeps running after the command finishes. Logs
+and process ids are in `~/.openjarvis`. No API keys are required.
+
+Install the dashboard with Node.js 22 LTS: Node 22.12 or newer, including
+22.20, and npm 10.9 or newer. npm 11 is fine. The desk does not need Node
+22.22 or npm 11.19. Some packages declare a newer Node floor; that
+declaration does not block install.
 
 The Executive Assistant uses `hermes3:8b` on Ollama when that model is
-installed. If it is not, it uses another local model, preferring
-`qwen3.5:4b`. The Chief of Staff uses OmniRoute when `OMNIROUTE_BASE_URL`
+installed. A config value of `hermes3` matches the tagged name Ollama
+lists (`hermes3:8b` or `hermes3-8b`). If Hermes is not installed, the
+assistant uses another local model, preferring `qwen3.5:4b`. The Chief
+of Staff uses OmniRoute when `OMNIROUTE_BASE_URL`
 is set, and the local model otherwise. If Ollama is not running, the desk
 still opens and the agents use their offline notes.
 

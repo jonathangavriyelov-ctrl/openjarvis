@@ -74,6 +74,9 @@ def _visual_section(assets: list[dict[str, Any]]) -> str:
 _PLAN_INSTRUCTION = (
     "Split the request into tasks. Reply with JSON only, no markdown:\n"
     '{{"tasks":[{{"specialist_id":"...","title":"...","brief":"..."}}]}}\n'
+    "When the request asks for a count of similar pieces "
+    "(for example three posts or five emails), return one task per piece, "
+    "up to 5. The same specialist_id may appear more than once. "
     "Use only these specialist_id values: {ids}."
 )
 

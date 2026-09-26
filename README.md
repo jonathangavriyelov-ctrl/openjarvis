@@ -60,9 +60,11 @@ One command starts the API and the dashboard, then prints the address. No API ke
 make os
 ```
 
-Open the URL it prints, usually [http://127.0.0.1:5173/os/world](http://127.0.0.1:5173/os/world). `scripts/os-up.sh` is the same command.
+Open the URL it prints, usually [http://127.0.0.1:5173/os/world](http://127.0.0.1:5173/os/world). `scripts/os-up.sh` is the same command. The script starts the API and the dashboard in the background, prints that URL, and returns. The desk keeps running. Logs and process ids are in `~/.openjarvis` (`os-api.log`, `os-ui.log`, `os-api.pid`, `os-ui.pid`).
 
-On an Apple Silicon Mac with Ollama, the Executive Assistant uses `hermes3:8b`. If that model is not installed, it uses another local model (`qwen3.5:4b` when you have it). The Chief of Staff uses OmniRoute when `OMNIROUTE_BASE_URL` is set, and Ollama otherwise. The desk still opens when Ollama is off: the agents answer from their offline notes.
+The dashboard installs on current Node.js 22 LTS: Node 22.12 or newer (including 22.20) and npm 10.9 or newer. npm 11 works too. Nothing in this desk requires Node 22.22 or npm 11.19. A few dependencies declare a newer Node floor; install does not treat that declaration as a hard failure.
+
+On an Apple Silicon Mac with Ollama, the Executive Assistant uses `hermes3:8b`. A config name of `hermes3` matches that tagged model. If Hermes is not installed, the assistant uses another local model (`qwen3.5:4b` when you have it). The Chief of Staff uses OmniRoute when `OMNIROUTE_BASE_URL` is set, and Ollama otherwise. The desk still opens when Ollama is off: the agents answer from their offline notes.
 
 ```bash
 ollama pull hermes3:8b

@@ -118,6 +118,63 @@ def test_custom_specialist_is_delegated_to():
     assert all(task.specialist_id != "finance_clerk" for task in plan_request("hello"))
 
 
+def test_countable_asks_become_separate_tasks():
+    ideas = plan_request("Draft 3 Instagram post ideas")
+    marketing = [task for task in ideas if task.specialist_id == "marketing_content"]
+    assert len(marketing) == 3
+    assert [task.title for task in marketing] == [
+        "Instagram post idea 1 of 3",
+        "Instagram post idea 2 of 3",
+        "Instagram post idea 3 of 3",
+    ]
+    assert "Write only this piece (1 of 3)" in marketing[0].brief
+    others = [task for task in ideas if task.specialist_id != "marketing_content"]
+    assert len(others) == 1
+
+    capped = [
+        task
+        for task in plan_request("Draft 12 posts")
+        if task.specialist_id == "marketing_content"
+    ]
+    assert len(capped) == 5
+    assert capped[0].title == "post 1 of 5"
+
+    single = plan_request("Draft a launch post and a content calendar")
+    assert [task.specialist_id for task in single] == ["marketing_content"]
+
+
+def test_model_plan_keeps_parallel_pieces_and_fills_a_short_plan():
+    one = json.dumps(
+        {
+            "tasks": [
+                {
+                    "specialist_id": "marketing_content",
+                    "title": "Instagram Post Idea #1",
+                    "brief": "Only the first idea.",
+                }
+            ]
+        }
+    )
+    expanded = plan_from_model_text(one, request="Draft 3 Instagram post ideas")
+    assert expanded is not None
+    assert len(expanded) == 3
+    assert expanded[0].specialist_id == "marketing_content"
+    assert expanded[0].title == "Instagram post idea 1 of 3"
+
+    three = json.dumps(
+        {
+            "tasks": [
+                {"specialist_id": "marketing_content", "title": "A", "brief": "a"},
+                {"specialist_id": "marketing_content", "title": "B", "brief": "b"},
+                {"specialist_id": "marketing_content", "title": "C", "brief": "c"},
+            ]
+        }
+    )
+    kept = plan_from_model_text(three, request="Draft 3 Instagram post ideas")
+    assert kept is not None
+    assert [task.title for task in kept] == ["A", "B", "C"]
+
+
 def test_model_plan_overrides_keywords_when_it_names_real_specialists():
     raw = json.dumps(
         {
@@ -199,6 +256,13 @@ def test_hermes_resolution_prefers_installed_hermes_then_falls_back():
 
     configured = resolve_configured_model("qwen3.5:4b", ["qwen3.5:4b"], True)
     assert configured.model_id == "qwen3.5:4b"
+
+    from openjarvis.personal.hermes import listed_variant
+
+    assert listed_variant("hermes3", ["qwen3.5:4b", "hermes3:8b"]) == "hermes3:8b"
+    assert listed_variant("hermes3", ["hermes3-8b"]) == "hermes3-8b"
+    assert listed_variant("qwen3", ["qwen3.5:4b", "qwen3:8b"]) == "qwen3:8b"
+    assert listed_variant("hermes3", ["hermes4:8b"]) is None
 
 
 def test_goal_pace_and_deadline_parsing():

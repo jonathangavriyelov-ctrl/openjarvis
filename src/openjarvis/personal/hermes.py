@@ -16,8 +16,13 @@ Assistant uses its offline structured producer.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Sequence
+
+# A trailing size tag such as ``8b``. Dots stay in the family name, so
+# ``qwen3`` does not match ``qwen3.5``.
+_SIZE_TAG = re.compile(r"^\d+(?:\.\d+)?b$")
 
 # Sized for a 16 GB Apple Silicon Mac running Ollama.
 DEFAULT_HERMES_MODEL = "hermes3:8b"
@@ -59,15 +64,56 @@ def _is_hermes3(name: str) -> bool:
     return "hermes3" in compact
 
 
+def _family_key(name: str) -> str:
+    """Model family, ignoring an Ollama tag or a short ``-8b`` suffix.
+
+    Registry paths stay intact, so two different Hugging Face ids do not
+    collapse into one family. ``hermes3``, ``hermes3:8b``, and ``hermes3-8b``
+    share a key. ``qwen3`` and ``qwen3.5:4b`` do not.
+    """
+    text = _norm(name)
+    if not text:
+        return ""
+    if "/" in text:
+        return text.split(":", 1)[0]
+    text = text.split(":", 1)[0]
+    if "-" in text:
+        base, suffix = text.rsplit("-", 1)
+        if base and _SIZE_TAG.fullmatch(suffix):
+            return base
+    return text
+
+
+def listed_variant(wanted: str, names: Sequence[str]) -> str | None:
+    """Return the listed id for *wanted*, including a tagged family variant.
+
+    Exact ids win. Otherwise the first listed name in the same family is
+    used, so a config value of ``hermes3`` selects Ollama's ``hermes3:8b``.
+    """
+    target = _norm(wanted)
+    if not target:
+        return None
+    cleaned = [name for name in names if name and str(name).strip()]
+    for name in cleaned:
+        if _norm(name) == target:
+            return name
+    key = _family_key(wanted)
+    if not key:
+        return None
+    for name in cleaned:
+        if _family_key(name) == key:
+            return name
+    return None
+
+
 def _matches(name: str, wanted: str) -> bool:
-    """True when *name* is the wanted id, tag, or a tagged variant of it."""
-    left = _norm(name)
-    right = _norm(wanted)
-    if not left or not right:
+    """True when *name* is the wanted id or a tagged variant of that family."""
+    if not _norm(name) or not _norm(wanted):
         return False
-    if left == right:
+    if _norm(name) == _norm(wanted):
         return True
-    return left.split(":", 1)[0] == right or right.split(":", 1)[0] == left
+    key = _family_key(wanted)
+    return bool(key) and _family_key(name) == key
 
 
 def resolve_executive_model(

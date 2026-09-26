@@ -26,6 +26,12 @@ def test_os_up_dry_run_prints_the_dashboard_url():
     assert "backend=" in text
     makefile = (ROOT / "Makefile").read_text()
     assert "scripts/os-up.sh" in makefile
+    source = script.read_text()
+    assert "nohup" in source
+    assert "disown" in source
+    assert "Ready:" in source
+    assert "trap cleanup" not in source
+    assert "\nwait\n" not in source
 
 
 def test_local_app_serves_the_desk_without_keys(tmp_path, monkeypatch):

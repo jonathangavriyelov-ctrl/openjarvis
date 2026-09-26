@@ -207,13 +207,32 @@ def _produce_executive(ctx: ProduceContext) -> Produced:
     return Produced(title=title, kind="priorities", body=body, goal=goal, note=note)
 
 
+def _marketing_subject(ctx: ProduceContext) -> str:
+    brief = (ctx.brief or "").strip()
+    if brief.startswith("Write only this piece"):
+        first = brief.split("\n", 1)[0].strip()
+        return _clip(first, 90)
+    return _clip(ctx.request, 90) or "the work in front of you"
+
+
 def _produce_marketing(ctx: ProduceContext) -> Produced:
-    subject = _clip(ctx.request, 90) or "the work in front of you"
+    subject = _marketing_subject(ctx)
     title = f"Content for {_clip(subject, 48)}"
+    single_piece = (ctx.brief or "").strip().startswith("Write only this piece")
     video_words = ("video", "clip", "reel", "short film")
     want_video = any(word in ctx.request.lower() for word in video_words)
     if ctx.model_text:
         body = ctx.model_text.strip()
+    elif single_piece:
+        body = "\n".join(
+            [
+                "## This piece",
+                subject,
+                "",
+                "Write this one post only. Leave the other pieces for "
+                "their own tasks.",
+            ]
+        )
     elif ctx.eli5:
         body = "\n".join(
             [
