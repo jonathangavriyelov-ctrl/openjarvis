@@ -20,6 +20,7 @@ from openjarvis.personal.hermes import (
     resolve_executive_model,
 )
 from openjarvis.personal.higgsfield import HiggsfieldClient, resolve_credentials
+from openjarvis.personal.knowledge import KnowledgeFeed
 from openjarvis.personal.memory_bridge import MemoryBridge
 from openjarvis.personal.omniroute import OmniRouteClient, resolve_omniroute
 from openjarvis.personal.phone import PhoneGate, describe_phone
@@ -179,6 +180,8 @@ class PersonalOffice:
                 path = resolve_google_desk_path(str(db_path), google_credentials_path)
             self.google = GoogleDesk(path)
         self.phone = phone if phone is not None else PhoneGate()
+        self.source_reader = None
+        self.feed = KnowledgeFeed(self)
         self._telegram_token = ""
         self._slack_token = ""
         self._slack_app_token = ""
@@ -476,19 +479,56 @@ class PersonalOffice:
         *,
         tags: str = "",
         world_id: str = "",
+        specialist_id: str = "",
     ) -> dict[str, Any]:
         scope = world_id or self._personal_id()
-        memory_id = self.memory.store(
-            f"{title}\n\n{body}",
-            {"tags": tags, "title": title, "world_id": scope},
-        )
-        return self.store.add_note(
+        tag_list = tags
+        if specialist_id and f"agent:{specialist_id}" not in tag_list:
+            tag_list = f"{tag_list},agent:{specialist_id}".strip(",")
+        meta: dict[str, Any] = {"tags": tag_list, "title": title, "world_id": scope}
+        if specialist_id:
+            meta["specialist_id"] = specialist_id
+        memory_id = self.memory.store(f"{title}\n\n{body}", meta)
+        note = self.store.add_note(
             title.strip() or "Note",
             body.strip(),
-            tags=tags,
+            tags=tag_list,
             memory_id=memory_id,
             world_id=scope,
         )
+        note["memory_id"] = memory_id
+        return note
+
+    def teach(self, **kwargs: Any) -> dict[str, Any]:
+        return self.feed.teach(**kwargs)
+
+    def teach_from_phone(self, text: str) -> dict[str, Any] | None:
+        return self.feed.teach_from_phone(text)
+
+    def teaching_reply(self, item: dict[str, Any]) -> str:
+        return self.feed.teaching_reply(item)
+
+    def list_knowledge(self, world_id: str = "") -> list[dict[str, Any]]:
+        return self.feed.list_items(world_id)
+
+    def learned(self, world_id: str = "") -> dict[str, Any]:
+        return self.feed.learned(world_id)
+
+    def reroute_knowledge(
+        self, item_id: str, *, world_id: str, specialist_id: str
+    ) -> dict[str, Any]:
+        return self.feed.reroute(
+            item_id, world_id=world_id, specialist_id=specialist_id
+        )
+
+    def remove_knowledge(self, item_id: str) -> dict[str, Any]:
+        return self.feed.remove(item_id)
+
+    def playbooks(self, status: str = "") -> list[dict[str, Any]]:
+        return self.feed.playbooks(status)
+
+    def decide_playbook(self, proposal_id: str, *, approve: bool) -> dict[str, Any]:
+        return self.feed.decide_playbook(proposal_id, approve=approve)
 
     def _personal_id(self) -> str:
         personal = self.store.personal_world()
@@ -566,6 +606,7 @@ class PersonalOffice:
             "project_count": len(self.store.list_projects(world_id)),
             "goal_count": len(self.store.list_goals(world_id)),
             "agent_count": sum(1 for row in team if row.get("enabled")),
+            "knowledge_count": self.store.knowledge_count(world_id),
             "accounts": [
                 self._public_account(account)
                 for account in self.store.list_google_accounts(world_id)
@@ -1028,7 +1069,7 @@ class PersonalOffice:
         a2a.state = TaskState.WORKING
         self.store.update_task(task["id"], status="working", a2a=a2a.to_dict())
         world_id = str(self._turn.get("world_id") or self._personal_id())
-        hits = self._recall(request, world_id)
+        hits = self._recall(request, world_id, spec.id)
         snap = self._turn.get("google") or {}
         desk = self._turn.get("desk") or self._google_for(world_id)
         briefing = ""
@@ -1114,16 +1155,33 @@ class PersonalOffice:
         del node, deliverable
         return body
 
-    def _recall(self, query: str, world_id: str | None = None) -> list[str]:
+    def _recall(
+        self,
+        query: str,
+        world_id: str | None = None,
+        specialist_id: str | None = None,
+    ) -> list[str]:
         scope = world_id or self._personal_id() or None
-        hits = [
-            note["body"]
-            for note in self.store.search_notes(query, limit=3, world_id=scope)
-        ]
-        for hit in self.memory.search(query, top_k=3, world_id=scope):
+        hits = []
+        for note in self.store.search_notes(query, limit=5, world_id=scope):
+            if not self._note_visible(note, specialist_id):
+                continue
+            hits.append(note["body"])
+        for hit in self.memory.search(
+            query, top_k=5, world_id=scope, specialist_id=specialist_id
+        ):
             if hit not in hits:
                 hits.append(hit)
         return hits[:5]
+
+    @staticmethod
+    def _note_visible(note: dict[str, Any], specialist_id: str | None) -> bool:
+        tags = note.get("tags") or ""
+        if "agent:" not in tags:
+            return True
+        if not specialist_id:
+            return True
+        return f"agent:{specialist_id}" in tags
 
     # -- views ---------------------------------------------------------------
 
@@ -1143,10 +1201,12 @@ class PersonalOffice:
                 "agents": {key: choice.to_dict() for key, choice in routed.items()},
             }
             team = {row["specialist_id"]: row for row in self.store.team(world_id)}
+            learned = self.store.learned_counts(world_id)
         else:
             states = self.store.agent_states()
             choices = self.model_choices()
             team = {}
+            learned = {}
         agents = []
         for spec in list_specialists():
             state = states.get(spec.id, {})
@@ -1160,6 +1220,7 @@ class PersonalOffice:
             )
             row["omniroute_model"] = member.get("omniroute_model") or ""
             row["brief"] = member.get("brief") or ""
+            row["learned_count"] = learned.get(spec.id, 0)
             routed_models = choices.get("agents") or {}
             if spec.id in routed_models:
                 row["model"] = routed_models[spec.id]
@@ -1268,15 +1329,18 @@ class PersonalOffice:
             ],
         }
 
-    def agent_view(self, specialist_id: str) -> dict[str, Any]:
+    def agent_view(
+        self, specialist_id: str, world_id: str | None = None
+    ) -> dict[str, Any]:
         spec = get_specialist(specialist_id)
-        row = next(item for item in self.roster() if item["id"] == spec.id)
+        row = next(item for item in self.roster(world_id) if item["id"] == spec.id)
         row["tasks"] = self.store.recent_tasks(spec.id)
         row["deliverables"] = self.store.list_deliverables(specialist_id=spec.id)
         row["skills_detail"] = [
             {"name": manifest.name, "description": manifest.description}
             for manifest in spec.skill_manifests()
         ]
+        row["learned"] = self.feed.lessons_for(spec.id, world_id)
         return row
 
     def phone_status(self) -> dict[str, Any]:

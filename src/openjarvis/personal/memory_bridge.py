@@ -28,7 +28,13 @@ class MemoryBridge:
         meta = dict(metadata or {})
         meta.setdefault("source", MEMORY_SOURCE)
         world_id = str(meta.get("world_id") or "")
-        stored = f"world:{world_id}\n{content}" if world_id else content
+        specialist_id = str(meta.get("specialist_id") or "")
+        lines: list[str] = []
+        if world_id:
+            lines.append(f"world:{world_id}")
+        if specialist_id:
+            lines.append(f"agent:{specialist_id}")
+        stored = "\n".join([*lines, content]) if lines else content
         try:
             return str(
                 self.backend.store(
@@ -41,12 +47,24 @@ class MemoryBridge:
             logger.debug("Second brain memory store failed", exc_info=True)
             return ""
 
+    def delete(self, memory_id: str) -> None:
+        if not memory_id or self.backend is None:
+            return
+        delete = getattr(self.backend, "delete", None)
+        if delete is None:
+            return
+        try:
+            delete(memory_id)
+        except Exception:
+            logger.debug("Second brain memory delete failed", exc_info=True)
+
     def search(
         self,
         query: str,
         top_k: int = 5,
         *,
         world_id: str | None = None,
+        specialist_id: str | None = None,
     ) -> list[str]:
         if self.backend is None or not query.strip():
             return []
@@ -65,10 +83,17 @@ class MemoryBridge:
                 continue
             text = str(content)
             if world_id:
-                if text.startswith(prefix):
-                    hits.append(text[len(prefix) :])
-                elif not text.startswith("world:"):
+                if not text.startswith(prefix):
                     continue
-            else:
+                text = text[len(prefix) :]
+            elif text.startswith("world:"):
+                _, _, text = text.partition("\n")
+            if text.startswith("agent:"):
+                agent, _, rest = text.partition("\n")
+                owner = agent.split(":", 1)[1]
+                if specialist_id and owner != specialist_id:
+                    continue
+                text = rest
+            if text:
                 hits.append(text)
         return hits

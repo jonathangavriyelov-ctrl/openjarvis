@@ -51,6 +51,12 @@ class PhoneGate:
         cleaned = (text or "").strip()
         if not cleaned:
             return None
+        try:
+            taught = office.teach_from_phone(cleaned)
+        except ValueError as exc:
+            return str(exc)[:3500]
+        if taught is not None:
+            return office.teaching_reply(taught)[:3500]
         detail = office.run_mission(cleaned, scope="route")
         summary = (detail.get("summary") or "").strip()
         if not summary:

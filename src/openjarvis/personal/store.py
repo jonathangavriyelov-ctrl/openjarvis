@@ -325,6 +325,41 @@ CREATE TABLE IF NOT EXISTS google_accounts (
     credentials_path TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS knowledge_items (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    lessons_json TEXT NOT NULL DEFAULT '[]',
+    sops_json TEXT NOT NULL DEFAULT '[]',
+    ideas_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS knowledge_routes (
+    id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL,
+    world_id TEXT NOT NULL,
+    specialist_id TEXT NOT NULL,
+    note_id TEXT NOT NULL DEFAULT '',
+    memory_id TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS playbook_proposals (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL,
+    specialist_id TEXT NOT NULL,
+    item_id TEXT NOT NULL DEFAULT '',
+    proposed_brief TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS scoped_agent_state (
     world_id TEXT NOT NULL,
     specialist_id TEXT NOT NULL,
@@ -1600,3 +1635,228 @@ class PersonalStore:
             data["a2a"] = json.loads(data.pop("a2a_json") or "{}")
             tasks.append(data)
         return tasks
+
+    def delete_note(self, note_id: str) -> None:
+        if not note_id:
+            return
+        with self._lock:
+            self._conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+            self._conn.commit()
+
+    def add_knowledge_item(
+        self,
+        *,
+        title: str,
+        kind: str,
+        source: str,
+        body: str,
+        summary: str,
+        lessons: list[str],
+        sops: list[str],
+        ideas: list[str],
+    ) -> dict[str, Any]:
+        item_id = _new_id()
+        now = _now()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO knowledge_items (id, title, kind, source, body, "
+                "summary, lessons_json, sops_json, ideas_json, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
+                (
+                    item_id,
+                    title,
+                    kind,
+                    source,
+                    body,
+                    summary,
+                    json.dumps(lessons),
+                    json.dumps(sops),
+                    json.dumps(ideas),
+                    now,
+                ),
+            )
+            self._conn.commit()
+        item = self.get_knowledge_item(item_id)
+        assert item is not None
+        return item
+
+    def get_knowledge_item(self, item_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM knowledge_items WHERE id = ?", (item_id,)
+            ).fetchone()
+        return self._knowledge_item(row) if row else None
+
+    def list_knowledge_items(self, status: str = "active") -> list[dict[str, Any]]:
+        with self._lock:
+            if status:
+                rows = self._conn.execute(
+                    "SELECT * FROM knowledge_items WHERE status = ? "
+                    "ORDER BY created_at DESC",
+                    (status,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM knowledge_items ORDER BY created_at DESC"
+                ).fetchall()
+        return [self._knowledge_item(row) for row in rows]
+
+    def set_knowledge_status(self, item_id: str, status: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE knowledge_items SET status = ? WHERE id = ?",
+                (status, item_id),
+            )
+            self._conn.commit()
+
+    def add_knowledge_route(
+        self,
+        *,
+        item_id: str,
+        world_id: str,
+        specialist_id: str,
+        note_id: str = "",
+        memory_id: str = "",
+        reason: str = "",
+    ) -> dict[str, Any]:
+        route_id = _new_id()
+        now = _now()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO knowledge_routes (id, item_id, world_id, "
+                "specialist_id, note_id, memory_id, reason, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    route_id,
+                    item_id,
+                    world_id,
+                    specialist_id,
+                    note_id,
+                    memory_id,
+                    reason,
+                    now,
+                ),
+            )
+            self._conn.commit()
+        return {
+            "id": route_id,
+            "item_id": item_id,
+            "world_id": world_id,
+            "specialist_id": specialist_id,
+            "note_id": note_id,
+            "memory_id": memory_id,
+            "reason": reason,
+            "created_at": now,
+        }
+
+    def list_knowledge_routes(self, item_id: str = "") -> list[dict[str, Any]]:
+        with self._lock:
+            if item_id:
+                rows = self._conn.execute(
+                    "SELECT * FROM knowledge_routes WHERE item_id = ? "
+                    "ORDER BY created_at",
+                    (item_id,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM knowledge_routes ORDER BY created_at"
+                ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_knowledge_routes(self, item_id: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM knowledge_routes WHERE item_id = ?", (item_id,)
+            )
+            self._conn.commit()
+
+    def knowledge_count(self, world_id: str) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(DISTINCT item_id) AS n FROM knowledge_routes "
+                "WHERE world_id = ?",
+                (world_id,),
+            ).fetchone()
+        return int(row["n"]) if row else 0
+
+    def learned_counts(self, world_id: str) -> dict[str, int]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT specialist_id, COUNT(DISTINCT item_id) AS n "
+                "FROM knowledge_routes WHERE world_id = ? GROUP BY specialist_id",
+                (world_id,),
+            ).fetchall()
+        return {row["specialist_id"]: int(row["n"]) for row in rows}
+
+    def add_playbook_proposal(
+        self,
+        *,
+        world_id: str,
+        specialist_id: str,
+        item_id: str,
+        proposed_brief: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        proposal_id = _new_id()
+        now = _now()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO playbook_proposals (id, world_id, specialist_id, "
+                "item_id, proposed_brief, reason, status, detail, created_at, "
+                "updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', '', ?, ?)",
+                (
+                    proposal_id,
+                    world_id,
+                    specialist_id,
+                    item_id,
+                    proposed_brief,
+                    reason,
+                    now,
+                    now,
+                ),
+            )
+            self._conn.commit()
+        proposal = self.get_playbook_proposal(proposal_id)
+        assert proposal is not None
+        return proposal
+
+    def get_playbook_proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM playbook_proposals WHERE id = ?", (proposal_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_playbook_proposals(self, status: str = "") -> list[dict[str, Any]]:
+        with self._lock:
+            if status:
+                rows = self._conn.execute(
+                    "SELECT * FROM playbook_proposals WHERE status = ? "
+                    "ORDER BY created_at DESC",
+                    (status,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM playbook_proposals ORDER BY created_at DESC"
+                ).fetchall()
+        return [dict(row) for row in rows]
+
+    def update_playbook_proposal(
+        self, proposal_id: str, *, status: str, detail: str = ""
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE playbook_proposals SET status = ?, detail = ?, "
+                "updated_at = ? WHERE id = ?",
+                (status, detail, _now(), proposal_id),
+            )
+            self._conn.commit()
+        return self.get_playbook_proposal(proposal_id)
+
+    @staticmethod
+    def _knowledge_item(row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        data["lessons"] = json.loads(data.pop("lessons_json") or "[]")
+        data["sops"] = json.loads(data.pop("sops_json") or "[]")
+        data["ideas"] = json.loads(data.pop("ideas_json") or "[]")
+        return data

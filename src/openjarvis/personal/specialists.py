@@ -101,6 +101,18 @@ class Specialist:
         }
 
 
+def _learned_lines(ctx: ProduceContext) -> list[str]:
+    if ctx.model_text:
+        return []
+    hits = [str(hit).strip() for hit in ctx.memory_hits if str(hit).strip()]
+    if not hits:
+        return []
+    lines = ["", "## What Jarvis learned"]
+    for hit in hits[:3]:
+        lines.append(f"- {_clip(hit, 220)}")
+    return lines
+
+
 def _clip(text: str, limit: int = 280) -> str:
     clean = " ".join((text or "").split())
     if len(clean) <= limit:
@@ -180,6 +192,7 @@ def _produce_executive(ctx: ProduceContext) -> Produced:
                 "What would make tomorrow morning feel on track?",
             ]
         )
+        parts.extend(_learned_lines(ctx))
         body = "\n".join(parts)
     if ctx.google_briefing.strip() and not ctx.model_text:
         body = f"{body.rstrip()}\n\n{ctx.google_briefing.strip()}"
@@ -240,6 +253,9 @@ def _produce_marketing(ctx: ProduceContext) -> Produced:
                 "Add variants only after the first draft exists.",
             ]
         )
+    extra = _learned_lines(ctx)
+    if extra:
+        body = f"{body.rstrip()}\n" + "\n".join(extra)
     body = _with_world(body, ctx)
     return Produced(
         title=title,

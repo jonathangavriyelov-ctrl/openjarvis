@@ -6,7 +6,7 @@ import logging
 import os
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from openjarvis.personal.google_desk import resolve_google_desk_path
@@ -352,13 +352,15 @@ def personal_hermes(request: Request) -> dict[str, Any]:
 
 
 @personal_router.get("/agents/{specialist_id}")
-def personal_agent(specialist_id: str, request: Request) -> dict[str, Any]:
+def personal_agent(
+    specialist_id: str, request: Request, world_id: str = ""
+) -> dict[str, Any]:
     office = _office_from_app(request)
     try:
         get_specialist(specialist_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return office.agent_view(specialist_id)
+    return office.agent_view(specialist_id, world_id or None)
 
 
 @personal_router.post("/missions")
@@ -590,3 +592,128 @@ def personal_drive_pull(body: DrivePullRequest, request: Request) -> dict[str, A
 @personal_router.get("/phone")
 def personal_phone(request: Request) -> dict[str, Any]:
     return _office_from_app(request).phone_status()
+
+
+class KnowledgeRequest(BaseModel):
+    text: str = ""
+    url: str = ""
+    title: str = ""
+    world_id: str = ""
+    specialist_id: str = ""
+
+
+class KnowledgeRouteRequest(BaseModel):
+    world_id: str = Field(..., min_length=1)
+    specialist_id: str = Field(..., min_length=1)
+
+
+def _knowledge_error(exc: Exception) -> None:
+    if isinstance(exc, KeyError):
+        raise HTTPException(
+            status_code=404, detail="That lesson was not found"
+        ) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    raise exc
+
+
+@personal_router.get("/knowledge")
+def personal_list_knowledge(request: Request, world_id: str = "") -> dict[str, Any]:
+    office = _office_from_app(request)
+    return {"items": office.list_knowledge(world_id)}
+
+
+@personal_router.get("/knowledge/learned")
+def personal_learned(request: Request, world_id: str = "") -> dict[str, Any]:
+    return _office_from_app(request).learned(world_id)
+
+
+@personal_router.get("/knowledge/playbooks")
+def personal_playbooks(request: Request, status: str = "") -> dict[str, Any]:
+    return {"playbooks": _office_from_app(request).playbooks(status)}
+
+
+@personal_router.post("/knowledge")
+def personal_teach(body: KnowledgeRequest, request: Request) -> dict[str, Any]:
+    office = _office_from_app(request)
+    try:
+        return office.teach(
+            text=body.text,
+            url=body.url,
+            title=body.title,
+            world_id=body.world_id,
+            specialist_id=body.specialist_id,
+        )
+    except (KeyError, ValueError) as exc:
+        _knowledge_error(exc)
+        raise
+
+
+@personal_router.post("/knowledge/file")
+def personal_teach_file(
+    request: Request,
+    file: UploadFile = File(...),
+    text: str = Form(""),
+    url: str = Form(""),
+    title: str = Form(""),
+    world_id: str = Form(""),
+    specialist_id: str = Form(""),
+) -> dict[str, Any]:
+    office = _office_from_app(request)
+    try:
+        return office.teach(
+            text=text,
+            url=url,
+            title=title,
+            filename=file.filename or "upload",
+            data=file.file.read(),
+            world_id=world_id,
+            specialist_id=specialist_id,
+        )
+    except (KeyError, ValueError) as exc:
+        _knowledge_error(exc)
+        raise
+
+
+@personal_router.post("/knowledge/{item_id}/route")
+def personal_reroute_knowledge(
+    item_id: str, body: KnowledgeRouteRequest, request: Request
+) -> dict[str, Any]:
+    office = _office_from_app(request)
+    try:
+        return office.reroute_knowledge(
+            item_id, world_id=body.world_id, specialist_id=body.specialist_id
+        )
+    except (KeyError, ValueError) as exc:
+        _knowledge_error(exc)
+        raise
+
+
+@personal_router.delete("/knowledge/{item_id}")
+def personal_remove_knowledge(item_id: str, request: Request) -> dict[str, Any]:
+    office = _office_from_app(request)
+    try:
+        return office.remove_knowledge(item_id)
+    except KeyError as exc:
+        _knowledge_error(exc)
+        raise
+
+
+@personal_router.post("/knowledge/playbooks/{proposal_id}/approve")
+def personal_approve_playbook(proposal_id: str, request: Request) -> dict[str, Any]:
+    office = _office_from_app(request)
+    try:
+        return office.decide_playbook(proposal_id, approve=True)
+    except (KeyError, ValueError) as exc:
+        _knowledge_error(exc)
+        raise
+
+
+@personal_router.post("/knowledge/playbooks/{proposal_id}/reject")
+def personal_reject_playbook(proposal_id: str, request: Request) -> dict[str, Any]:
+    office = _office_from_app(request)
+    try:
+        return office.decide_playbook(proposal_id, approve=False)
+    except KeyError as exc:
+        _knowledge_error(exc)
+        raise

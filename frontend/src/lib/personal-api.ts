@@ -35,6 +35,8 @@ export interface PersonalAgent {
   higgsfield_enabled?: boolean;
   omniroute_model?: string;
   brief?: string;
+  learned_count?: number;
+  learned?: LearnedLesson[];
   tasks?: PersonalTask[];
   deliverables?: Deliverable[];
   skills_detail?: { name: string; description: string }[];
@@ -211,7 +213,64 @@ export interface DeskWorld {
   project_count: number;
   goal_count: number;
   agent_count: number;
+  knowledge_count?: number;
   accounts: GoogleAccountView[];
+}
+
+export interface KnowledgeRoute {
+  id: string;
+  world_id: string;
+  world_name: string;
+  specialist_id: string;
+  agent_name: string;
+  reason: string;
+}
+
+export interface KnowledgeItem {
+  id: string;
+  title: string;
+  kind: string;
+  source: string;
+  summary: string;
+  lessons: string[];
+  sops: string[];
+  ideas: string[];
+  status: string;
+  created_at: string;
+  routes: KnowledgeRoute[];
+}
+
+export interface LearnedLesson {
+  title: string;
+  summary: string;
+  lessons: string[];
+  world_id: string;
+  world_name: string;
+}
+
+export interface LearnedWorld {
+  id: string;
+  name: string;
+  agents: {
+    id: string;
+    name: string;
+    count: number;
+    items: { id: string; title: string; summary: string; lessons: string[]; sops: string[]; ideas: string[] }[];
+  }[];
+}
+
+export interface PlaybookProposal {
+  id: string;
+  world_id: string;
+  world_name: string;
+  specialist_id: string;
+  agent_name: string;
+  item_id: string;
+  proposed_brief: string;
+  reason: string;
+  status: string;
+  detail: string;
+  created_at: string;
 }
 
 export interface TeamMember {
@@ -347,7 +406,63 @@ export const disconnectAccount = (worldId: string, accountId: string) =>
     method: 'DELETE',
   });
 
-export const fetchAgent = (id: string) => read<PersonalAgent>(`/v1/personal/agents/${id}`);
+export const fetchAgent = (id: string, worldId?: string | null) =>
+  read<PersonalAgent>(
+    `/v1/personal/agents/${id}${worldId ? `?world_id=${encodeURIComponent(worldId)}` : ''}`,
+  );
+
+export const fetchKnowledge = (worldId?: string | null) =>
+  read<{ items: KnowledgeItem[] }>(
+    `/v1/personal/knowledge${worldId ? `?world_id=${encodeURIComponent(worldId)}` : ''}`,
+  );
+
+export const teachKnowledge = (body: {
+  text?: string;
+  url?: string;
+  title?: string;
+  world_id?: string;
+  specialist_id?: string;
+}) => read<KnowledgeItem>('/v1/personal/knowledge', { method: 'POST', body: JSON.stringify(body) });
+
+export async function uploadKnowledge(form: FormData): Promise<KnowledgeItem> {
+  const response = await apiFetch('/v1/personal/knowledge/file', { method: 'POST', body: form });
+  if (!response.ok) {
+    let detail = `Request failed (${response.status})`;
+    try {
+      const body = await response.json();
+      if (typeof body?.detail === 'string') detail = body.detail;
+    } catch {
+      /* the body was not JSON */
+    }
+    throw new Error(detail);
+  }
+  return response.json() as Promise<KnowledgeItem>;
+}
+
+export const rerouteKnowledge = (id: string, worldId: string, specialistId: string) =>
+  read<KnowledgeItem>(`/v1/personal/knowledge/${id}/route`, {
+    method: 'POST',
+    body: JSON.stringify({ world_id: worldId, specialist_id: specialistId }),
+  });
+
+export const removeKnowledge = (id: string) =>
+  read<{ id: string; removed: boolean }>(`/v1/personal/knowledge/${id}`, { method: 'DELETE' });
+
+export const fetchLearned = (worldId?: string | null) =>
+  read<{ worlds: LearnedWorld[] }>(
+    `/v1/personal/knowledge/learned${worldId ? `?world_id=${encodeURIComponent(worldId)}` : ''}`,
+  );
+
+export const fetchPlaybooks = (status = 'pending') =>
+  read<{ playbooks: PlaybookProposal[] }>(
+    `/v1/personal/knowledge/playbooks${status ? `?status=${encodeURIComponent(status)}` : ''}`,
+  );
+
+export const approvePlaybook = (id: string) =>
+  read<PlaybookProposal>(`/v1/personal/knowledge/playbooks/${id}/approve`, { method: 'POST' });
+
+export const rejectPlaybook = (id: string) =>
+  read<PlaybookProposal>(`/v1/personal/knowledge/playbooks/${id}/reject`, { method: 'POST' });
 
 export const fetchHermes = () =>
   read<{

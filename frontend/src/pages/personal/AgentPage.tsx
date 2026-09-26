@@ -3,18 +3,19 @@ import { Link, useParams } from 'react-router';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { fetchAgent, routeLabel, statusLabel, type PersonalAgent } from '../../lib/personal-api';
-import { OsError, OsShell } from './Shell';
+import { OsError, OsShell, useDeskWorld } from './Shell';
 import './personal.css';
 
 export function AgentPage() {
   const { agentId = '' } = useParams();
+  const deskWorld = useDeskWorld();
   const [agent, setAgent] = useState<PersonalAgent | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
     let stop = false;
     const pull = () => {
-      fetchAgent(agentId)
+      fetchAgent(agentId, deskWorld)
         .then((data) => {
           if (!stop) {
             setAgent(data);
@@ -31,7 +32,7 @@ export function AgentPage() {
       stop = true;
       window.clearInterval(timer);
     };
-  }, [agentId]);
+  }, [agentId, deskWorld]);
 
   return (
     <OsShell
@@ -49,6 +50,17 @@ export function AgentPage() {
               {statusLabel(agent.status)}
             </p>
             <p className="muted" style={{ marginTop: 8 }}>{agent.current_work || 'Waiting for the chief of staff.'}</p>
+            <h2 style={{ marginTop: 16 }}>What Jarvis learned</h2>
+            {(agent.learned ?? []).length === 0 && (
+              <p className="muted">Nothing taught to this agent yet.</p>
+            )}
+            <ul>
+              {(agent.learned ?? []).map((item) => (
+                <li key={`${item.world_id}-${item.title}`}>
+                  <strong>{item.world_name}</strong> — {item.lessons[0] || item.summary}
+                </li>
+              ))}
+            </ul>
             <h2 style={{ marginTop: 16 }}>Procedures</h2>
             <ul className="muted">
               {(agent.skills_detail ?? []).map((skill) => (

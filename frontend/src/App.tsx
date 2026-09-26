@@ -15,6 +15,7 @@ import { ChiefPage } from './pages/personal/ChiefPage';
 import { AgentPage } from './pages/personal/AgentPage';
 import { GoalsPage } from './pages/personal/GoalsPage';
 import { SecondBrainPage } from './pages/personal/SecondBrainPage';
+import { KnowledgePage } from './pages/personal/KnowledgePage';
 import { DeliverablesPage } from './pages/personal/DeliverablesPage';
 import { CommandPalette } from './components/CommandPalette';
 import { SetupScreen } from './components/SetupScreen';
@@ -199,6 +200,7 @@ export default function App() {
           <Route path="os/agents/:agentId" element={<AgentPage />} />
           <Route path="os/goals" element={<GoalsPage />} />
           <Route path="os/brain" element={<SecondBrainPage />} />
+          <Route path="os/feed" element={<KnowledgePage />} />
           <Route path="os/library" element={<DeliverablesPage />} />
           <Route path="memory" element={<MemoryHubPage />} />
           <Route path="settings" element={<SettingsPage />} />

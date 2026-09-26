@@ -7,6 +7,7 @@ const LINKS = [
   { to: '/os/chief', label: 'Chief of Staff', simple: 'The boss helper' },
   { to: '/os/goals', label: 'Goals', simple: 'Goals' },
   { to: '/os/brain', label: 'Second Brain', simple: 'Notes' },
+  { to: '/os/feed', label: 'Knowledge', simple: 'Teaching' },
   { to: '/os/library', label: 'Deliverables', simple: 'Finished work' },
 ];
 

@@ -234,6 +234,9 @@ export function WorldPage() {
                 <em>{tradeOf(planet)}</em>
                 <small>
                   {planet.project_count} projects · {planet.goal_count} goals · {planet.agent_count} agents
+                  {(planet.knowledge_count ?? 0) > 0
+                    ? ` · ${planet.knowledge_count} ${planet.knowledge_count === 1 ? 'lesson' : 'lessons'}`
+                    : ''}
                 </small>
                 {planet.accounts.length === 0 && <span className="planet-mail">Connect email</span>}
               </button>
@@ -378,7 +381,10 @@ export function WorldPage() {
                 <span className={`status-dot is-${agent.status}`}>{statusLabel(agent.status, eli5)}</span>
               </span>
               <em>{agent.current_work || (eli5 ? 'Nothing right now' : agent.niche)}</em>
-              <small>{routeLabel(agent.model)}</small>
+              <small>
+                {routeLabel(agent.model)}
+                {(agent.learned_count ?? 0) > 0 ? ` · ${agent.learned_count} learned` : ''}
+              </small>
             </button>
           );
         })}

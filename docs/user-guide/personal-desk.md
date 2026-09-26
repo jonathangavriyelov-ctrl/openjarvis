@@ -276,3 +276,30 @@ Click a planet to zoom into that world's projects, goals, and agents.
 
 The dashboard never shows the bot token, the OAuth client secret, or the
 refresh token.
+
+## Knowledge feed
+
+Open **Knowledge** to teach Jarvis. You can paste a note, upload a text file,
+a PDF, or a Word `.docx`, or send a link. A YouTube link is read from the
+video's captions when they are published. A web link is read as the page's
+text. If a video has no captions, paste the transcript into the note.
+
+The chief of staff summarizes the item, pulls out lessons and procedures, and
+files them with the worlds and agents they match. An MCA underwriting lesson
+goes to Quick Funders. A content strategy lesson goes to the marketing agents.
+You can also pick the world and agent yourself. Each item shows where it
+landed. **Move** sends it somewhere else. **Remove** takes it out of those
+agents' memory.
+
+Agents search that memory while they work, and only inside their own world.
+A lesson filed with Quick Funders is not visible to Glatt Express. If the
+lesson implies a new habit ("always …" or a numbered procedure), the agent
+proposes a playbook change. The current instructions stay as they are until
+you press **Approve** on the Knowledge page. **Reject** leaves them alone.
+
+On the phone, send a link by itself, or start the message with `teach`,
+`learn`, or `feed`. You can name the world first: `teach Quick Funders: `
+followed by the note or the link. The reply says where the lesson was filed.
+
+The eco world shows lesson counts on each planet, and each agent shows how
+many lessons it has learned.
