@@ -224,6 +224,7 @@ export function InputArea() {
     let usage: TokenUsage | undefined;
     let complexity: { score: number; tier: string; suggested_max_tokens: number } | undefined;
     let routedEngine: string | undefined;
+    let responseModel = '';
     const toolCalls: ToolCallInfo[] = [];
     const researchTraces: ResearchSearchTrace[] = [];
     const researchSourcesByRef = new Map<number, ResearchSource>();
@@ -433,6 +434,7 @@ export function InputArea() {
             if (data.usage) usage = data.usage;
             if (data.complexity) complexity = data.complexity;
             routedEngine = engineFromCompletionChunk(data) ?? routedEngine;
+            if (typeof data.model === 'string' && data.model) responseModel = data.model;
             if (delta?.content) {
               if (!ttftMs) ttftMs = Date.now() - startTime;
               accumulatedContent += delta.content;
@@ -484,7 +486,7 @@ export function InputArea() {
       });
       const telemetry: MessageTelemetry = {
         engine: engineLabel,
-        model_id: selectedModel,
+        model_id: responseModel || selectedModel,
         total_ms: totalMs,
         ttft_ms: ttftMs,
         tokens_per_sec: usage?.completion_tokens

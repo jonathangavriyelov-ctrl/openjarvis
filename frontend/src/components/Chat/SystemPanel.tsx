@@ -9,11 +9,10 @@ import {
   HardDrive,
   Hash,
   X,
-  Trophy,
-  ExternalLink,
 } from 'lucide-react';
 import { useAppStore } from '../../lib/store';
 import { getBase } from '../../lib/api';
+import { HelpTip } from '../HelpTip';
 
 interface EnergyData {
   total_energy_j?: number;
@@ -37,8 +36,6 @@ const CLOUD_PRICING = [
 export function SystemPanel() {
   const savings = useAppStore((s) => s.savings);
   const toggleSystemPanel = useAppStore((s) => s.toggleSystemPanel);
-  const optInEnabled = useAppStore((s) => s.optInEnabled);
-  const setOptInModalOpen = useAppStore((s) => s.setOptInModalOpen);
   const liveEnergy = useAppStore((s) => s.liveEnergy);
   const [energy, setEnergy] = useState<EnergyData | null>(null);
   const [telemetry, setTelemetry] = useState<TelemetryStats | null>(null);
@@ -106,40 +103,74 @@ export function SystemPanel() {
       <div className="flex flex-col gap-4 p-4">
         {/* Session Stats */}
         <section>
-          <h4 className="text-[11px] font-medium uppercase tracking-wide mb-2" style={{ color: 'var(--color-text-tertiary)' }}>
-            Session
+          <h4 className="text-xs font-medium mb-2" style={{ color: 'var(--color-text-secondary)' }}>
+            This chat
           </h4>
           <div className="grid grid-cols-2 gap-2">
-            <MiniStat icon={Hash} label="Requests" value={String(savings?.total_calls ?? telemetry?.total_requests ?? 0)} />
-            <MiniStat icon={Hash} label="Output Tokens" value={formatNumber(savings?.total_completion_tokens ?? telemetry?.total_tokens ?? 0)} />
+            <MiniStat
+              icon={Hash}
+              label="Questions asked"
+              value={String(savings?.total_calls ?? telemetry?.total_requests ?? 0)}
+              hint="How many answers were requested."
+              tip="Each time you ask for an answer, it counts here."
+            />
+            <MiniStat
+              icon={Hash}
+              label="Text written"
+              value={formatNumber(savings?.total_completion_tokens ?? telemetry?.total_tokens ?? 0)}
+              unit="tokens"
+              hint="Tokens are small pieces of text."
+              tip="The reply is counted in tokens, which are small pieces of words."
+            />
           </div>
         </section>
 
         {/* Device */}
         <section>
-          <h4 className="text-[11px] font-medium uppercase tracking-wide mb-2" style={{ color: 'var(--color-text-tertiary)' }}>
-            Device
+          <h4 className="text-xs font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>
+            Energy used by your Mac today
           </h4>
+          <p className="text-xs mb-2" style={{ color: 'var(--color-text-tertiary)' }}>
+            Electricity this computer used while answering.
+          </p>
           <div className="grid grid-cols-2 gap-2">
             {energy?.cpu_temp_c != null && (
-              <MiniStat icon={Thermometer} label="CPU Temp" value={String(Math.round(energy.cpu_temp_c))} unit="°C" />
+              <MiniStat
+                icon={Thermometer}
+                label="Processor temperature"
+                value={String(Math.round(energy.cpu_temp_c))}
+                unit="degrees"
+                hint="How warm the main chip is."
+                tip="Degrees Celsius. Higher means the chip is working harder."
+              />
             )}
             {energy?.gpu_temp_c != null && (
-              <MiniStat icon={Thermometer} label="GPU Temp" value={String(Math.round(energy.gpu_temp_c))} unit="°C" />
+              <MiniStat
+                icon={Thermometer}
+                label="Graphics temperature"
+                value={String(Math.round(energy.gpu_temp_c))}
+                unit="degrees"
+                hint="How warm the graphics chip is."
+                tip="Degrees Celsius for the graphics chip."
+              />
             )}
             <MiniStat
               icon={Zap}
-              label="Power"
+              label="Power right now"
               value={(liveEnergy?.power_w ?? energy?.avg_power_w ?? 0).toFixed(1)}
-              unit="W"
+              unit="watts"
+              hint="How hard the Mac is working this moment."
+              tip="Watts measure how fast electricity is being used right now."
             />
             <MiniStat
               icon={Activity}
-              label="Energy"
+              label="Energy used"
               value={(
                 ((liveEnergy?.energy_j ?? energy?.total_energy_j ?? 0) / 1000)
               ).toFixed(1)}
-              unit="kJ"
+              unit="kilojoules"
+              hint="All the electricity counted so far."
+              tip="A kilojoule is a measure of energy used by this Mac."
             />
           </div>
         </section>
@@ -147,9 +178,13 @@ export function SystemPanel() {
 
         {/* Cost Comparison */}
         <section>
-          <h4 className="text-[11px] font-medium uppercase tracking-wide mb-2" style={{ color: 'var(--color-text-tertiary)' }}>
-            Cost Comparison
+          <h4 className="text-xs font-medium mb-1 flex items-center gap-2" style={{ color: 'var(--color-text-secondary)' }}>
+            Money saved vs. paying for cloud AI
+            <HelpTip above text="This compares electricity on your Mac with what a cloud company would charge." />
           </h4>
+          <p className="text-xs mb-2" style={{ color: 'var(--color-text-tertiary)' }}>
+            What the same questions would have cost in the cloud.
+          </p>
 
           {/* Local */}
           <div
@@ -158,10 +193,11 @@ export function SystemPanel() {
           >
             <HardDrive size={14} style={{ color: 'var(--color-accent)' }} />
             <div className="flex-1 min-w-0">
-              <div className="text-xs font-medium truncate" style={{ color: 'var(--color-text)' }}>Local</div>
+              <div className="text-xs font-medium truncate" style={{ color: 'var(--color-text)' }}>On your Mac</div>
+              <div className="text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>Electricity only.</div>
             </div>
             <div className="text-sm font-semibold" style={{ color: 'var(--color-success)' }}>
-              ${(savings?.local_cost ?? 0).toFixed(4)}
+              {(savings?.local_cost ?? 0).toFixed(2)} dollars
             </div>
           </div>
 
@@ -192,13 +228,13 @@ export function SystemPanel() {
                     </div>
                   </div>
                   <div className="text-right shrink-0">
-                    <div className="text-xs font-mono" style={{ color: 'var(--color-text)' }}>
-                      ${cost.toFixed(4)}
+                    <div className="text-xs" style={{ color: 'var(--color-text)' }}>
+                      {cost.toFixed(2)} dollars
                     </div>
                     {saved > 0.0001 && (
-                      <div className="text-[9px] flex items-center gap-0.5 justify-end" style={{ color: 'var(--color-success)' }}>
+                      <div className="text-[11px] flex items-center gap-0.5 justify-end" style={{ color: 'var(--color-success)' }}>
                         <TrendingDown size={8} />
-                        ${saved.toFixed(4)}
+                        {saved.toFixed(2)} dollars saved
                       </div>
                     )}
                   </div>
@@ -208,66 +244,6 @@ export function SystemPanel() {
           </div>
 
 
-        </section>
-
-        {/* Leaderboard / Share */}
-        <section>
-          <h4
-            className="text-[11px] font-medium uppercase tracking-wide mb-2"
-            style={{ color: 'var(--color-text-tertiary)' }}
-          >
-            Leaderboard
-          </h4>
-
-          <button
-            onClick={() => setOptInModalOpen(true)}
-            className="w-full flex items-center gap-2 rounded-lg px-3 py-2.5 transition-colors cursor-pointer"
-            style={{
-              background: optInEnabled
-                ? 'var(--color-accent-subtle)'
-                : 'var(--color-bg-secondary)',
-              border: optInEnabled
-                ? '1px solid var(--color-accent)'
-                : '1px solid var(--color-border)',
-            }}
-          >
-            <Trophy
-              size={14}
-              style={{
-                color: optInEnabled ? 'var(--color-accent)' : 'var(--color-text-tertiary)',
-              }}
-            />
-            <span
-              className="text-xs flex-1 text-left"
-              style={{
-                color: optInEnabled ? 'var(--color-accent)' : 'var(--color-text-secondary)',
-              }}
-            >
-              {optInEnabled ? 'Sharing Savings' : 'Share Your Savings'}
-            </span>
-            <span
-              className="text-[9px] px-1.5 py-0.5 rounded-full"
-              style={{
-                background: optInEnabled ? 'var(--color-accent)' : 'var(--color-bg-tertiary, var(--color-bg-secondary))',
-                color: optInEnabled ? 'white' : 'var(--color-text-tertiary)',
-              }}
-            >
-              {optInEnabled ? 'ON' : 'OFF'}
-            </span>
-          </button>
-
-          <a
-            href="https://open-jarvis.github.io/OpenJarvis/leaderboard"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1.5 mt-1.5 px-3 py-1.5 text-[11px] rounded-lg transition-colors"
-            style={{ color: 'var(--color-text-tertiary)' }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--color-accent)')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--color-text-tertiary)')}
-          >
-            <ExternalLink size={10} />
-            View Leaderboard
-          </a>
         </section>
       </div>
     </div>
@@ -279,11 +255,15 @@ function MiniStat({
   label,
   value,
   unit,
+  hint,
+  tip,
 }: {
   icon: typeof Zap;
   label: string;
   value: string;
   unit?: string;
+  hint?: string;
+  tip?: string;
 }) {
   return (
     <div
@@ -292,18 +272,22 @@ function MiniStat({
     >
       <div className="flex items-center gap-1 mb-0.5">
         <Icon size={10} style={{ color: 'var(--color-accent)' }} />
-        <span className="text-[10px]" style={{ color: 'var(--color-text-tertiary)' }}>
+        <span className="text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>
           {label}
         </span>
+        {tip && <HelpTip above text={tip} />}
       </div>
       <div className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
         {value}
         {unit && (
-          <span className="text-[10px] font-normal ml-0.5" style={{ color: 'var(--color-text-tertiary)' }}>
+          <span className="text-[11px] font-normal ml-1" style={{ color: 'var(--color-text-tertiary)' }}>
             {unit}
           </span>
         )}
       </div>
+      {hint && (
+        <p className="text-[11px] mt-0.5" style={{ color: 'var(--color-text-tertiary)' }}>{hint}</p>
+      )}
     </div>
   );
 }

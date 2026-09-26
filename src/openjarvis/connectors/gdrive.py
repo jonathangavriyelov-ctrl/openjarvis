@@ -50,6 +50,7 @@ def _gdrive_api_list_files(
     token: str,
     *,
     page_token: Optional[str] = None,
+    query: str = "",
 ) -> Dict[str, Any]:
     """Call the Drive ``files.list`` endpoint.
 
@@ -59,6 +60,8 @@ def _gdrive_api_list_files(
         OAuth access token.
     page_token:
         Pagination token from a previous response's ``nextPageToken``.
+    query:
+        Optional Drive ``q`` filter, such as ``name contains 'notes'``.
 
     Returns
     -------
@@ -74,6 +77,8 @@ def _gdrive_api_list_files(
     }
     if page_token:
         params["pageToken"] = page_token
+    if query:
+        params["q"] = query
 
     resp = httpx.get(
         f"{_GDRIVE_API_BASE}/files",

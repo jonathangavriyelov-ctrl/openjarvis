@@ -1162,6 +1162,9 @@ def include_all_routes(app) -> None:
     app.include_router(speech_router)
     app.include_router(feedback_router)
     app.include_router(optimize_router)
+    from openjarvis.personal.routes import mount_personal  # noqa: PLC0415
+
+    mount_personal(app)
 
     # Agent Manager routes (if available)
     try:

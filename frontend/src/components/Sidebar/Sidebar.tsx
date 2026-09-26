@@ -19,8 +19,12 @@ import {
   Database,
   Orbit,
   Brain,
+  Flower2,
+  Lock,
+  type LucideIcon,
 } from 'lucide-react';
 import { ConversationList } from './ConversationList';
+import { requestLock } from '../../lib/os-gate';
 import { useAppStore } from '../../lib/store';
 
 export function Sidebar() {
@@ -54,9 +58,10 @@ export function Sidebar() {
     navigate('/');
   };
 
-  const navItems = [
+  const navItems: { path: string; icon: LucideIcon; label: string; match?: string }[] = [
     { path: '/', icon: MessageSquare, label: 'Chat' },
     { path: '/ecosystem', icon: Orbit, label: 'Ecosystem' },
+    { path: '/os/world', icon: Flower2, label: 'AI OS', match: '/os' },
     { path: '/memory', icon: Brain, label: 'Memory' },
     { path: '/dashboard', icon: BarChart3, label: 'Dashboard' },
     { path: '/data-sources', icon: Database, label: 'Data Sources' },
@@ -198,7 +203,9 @@ export function Sidebar() {
           {/* Bottom nav */}
           <nav className="px-2 pb-3 pt-2 flex flex-col gap-0.5" style={{ borderTop: '1px solid var(--color-border)' }}>
             {navItems.map((item) => {
-              const isActive = location.pathname === item.path;
+              const isActive = item.match
+                ? location.pathname.startsWith(item.match)
+                : location.pathname === item.path;
               return (
                 <button
                   key={item.path}
@@ -231,6 +238,21 @@ export function Sidebar() {
                 </button>
               );
             })}
+            <button
+              type="button"
+              onClick={() => requestLock()}
+              className="relative flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors w-full text-left cursor-pointer"
+              style={{ color: 'var(--color-text-secondary)' }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'var(--color-bg-secondary)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent';
+              }}
+            >
+              <Lock size={16} />
+              Lock
+            </button>
           </nav>
         </div>
       </aside>

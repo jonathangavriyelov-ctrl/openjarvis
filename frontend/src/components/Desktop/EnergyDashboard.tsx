@@ -264,13 +264,13 @@ export function EnergyDashboard({ apiUrl }: { apiUrl: string }) {
     return (
       <div style={styles.container}>
         <div style={styles.header}>
-          <h2 style={styles.title}>Energy Monitor</h2>
+          <h2 style={styles.title}>Energy used by your Mac today</h2>
         </div>
         <div style={styles.emptyState}>
           <div style={styles.emptyIcon}>&#x26A1;</div>
           <div style={styles.emptyText}>
-            No energy data available.<br />
-            Ensure an energy monitor backend (NVIDIA, AMD, Apple, or RAPL) is configured.
+            No energy numbers yet.<br />
+            Ask something on this Mac and the electricity it used will show up here.
           </div>
         </div>
       </div>
@@ -291,7 +291,7 @@ export function EnergyDashboard({ apiUrl }: { apiUrl: string }) {
 
       {/* Header */}
       <div style={styles.header}>
-        <h2 style={styles.title}>Energy Monitor</h2>
+        <h2 style={styles.title}>Energy used by your Mac today</h2>
         <span style={styles.liveBadge}>
           <span style={styles.liveDot} />
           Live - {REFRESH_INTERVAL_MS / 1000}s

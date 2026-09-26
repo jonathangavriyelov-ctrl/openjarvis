@@ -23,6 +23,7 @@ from openjarvis.intelligence import (
     merge_discovered_models,
     register_builtin_models,
 )
+from openjarvis.personal.hermes import listed_variant
 
 logger = logging.getLogger(__name__)
 
@@ -110,8 +111,13 @@ def _resolve_server_model(
     )
 
     for candidate in candidates:
-        if candidate and (not available or candidate in available):
+        if not candidate:
+            continue
+        if not available:
             return candidate
+        match = listed_variant(candidate, available)
+        if match:
+            return match
 
     return available[0] if available else ""
 
@@ -217,6 +223,7 @@ def serve(
     _has_cloud = (
         os.environ.get("OPENAI_API_KEY")
         or os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("XAI_API_KEY")
         or os.environ.get("GEMINI_API_KEY")
         or os.environ.get("GOOGLE_API_KEY")
         or os.environ.get("OPENROUTER_API_KEY")

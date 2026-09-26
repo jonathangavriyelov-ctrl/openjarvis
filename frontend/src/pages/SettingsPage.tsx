@@ -27,6 +27,9 @@ import {
   setInferenceSource,
   getCloudKeyStatus,
   saveCloudKey,
+  fetchCloudProviders,
+  testCloudProvider,
+  type CloudProviderState,
   fetchToolCredentialStatus,
   saveToolCredentials,
   deleteToolCredential,
@@ -196,6 +199,72 @@ function CloudProviderStatus({ label, keyName }: { label: string; keyName: strin
       }} />
       {label}
     </span>
+  );
+}
+
+function CloudConnections() {
+  const [providers, setProviders] = useState<CloudProviderState[]>([]);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState('');
+
+  useEffect(() => {
+    fetchCloudProviders()
+      .then(setProviders)
+      .catch(() => setProviders([]));
+  }, []);
+
+  const test = async (id: string) => {
+    setBusy(id);
+    setNote('');
+    try {
+      const result = await testCloudProvider(id);
+      setNote(result.ok ? `${result.model} answered.` : result.detail);
+    } catch {
+      setNote('That did not work.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  if (providers.length === 0) {
+    return (
+      <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+        Provider status is available after the desk is unlocked.
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {providers.map((provider) => (
+        <div key={provider.id} className="flex items-center justify-between gap-3">
+          <span className="text-sm" style={{ color: 'var(--color-text)' }}>
+            {provider.name}
+            <span className="ml-2 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+              {provider.connected ? 'Connected' : 'Not connected'}
+            </span>
+          </span>
+          <button
+            type="button"
+            disabled={!provider.connected || busy === provider.id}
+            onClick={() => void test(provider.id)}
+            className="px-2 py-1 rounded text-xs cursor-pointer"
+            style={{
+              background: 'var(--color-bg-tertiary)',
+              border: '1px solid var(--color-border)',
+              color: 'var(--color-text)',
+            }}
+          >
+            {busy === provider.id ? 'Testing…' : 'Test'}
+          </button>
+        </div>
+      ))}
+      {note && (
+        <p className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+          {note}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -550,6 +619,15 @@ export function SettingsPage() {
             </SettingRow>
           </Section>
 
+          <Section title="Cloud providers">
+            <SettingRow
+              label="Keys from the environment"
+              description="Connected means the key is set. The key itself is never shown."
+            >
+              <CloudConnections />
+            </SettingRow>
+          </Section>
+
           {/* API Keys */}
           <Section title="API Keys">
             <SettingRow label="OpenAI" description="GPT-4, GPT-3.5, etc.">
@@ -817,6 +895,33 @@ export function SettingsPage() {
                 {updateCheckState === 'available' && 'Update available — see banner above'}
                 {updateCheckState === 'latest' && 'Already up to date'}
                 {updateCheckState === 'idle' && 'Check now'}
+              </button>
+            </SettingRow>
+          </Section>
+
+          <Section title="Advanced">
+            <SettingRow
+              label="Share Your Savings"
+              description="Off. This is the only switch for the optional savings contest. Nothing else asks you to join."
+            >
+              <button
+                type="button"
+                aria-pressed={settings.leaderboardPrompt}
+                onClick={() => {
+                  const next = !settings.leaderboardPrompt;
+                  updateSettings({ leaderboardPrompt: next });
+                  useAppStore.getState().setOptInModalOpen(next);
+                }}
+                className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
+                style={{ background: settings.leaderboardPrompt ? 'var(--color-accent)' : 'var(--color-bg-tertiary)', border: '1px solid var(--color-border)' }}
+              >
+                <span
+                  className="inline-block h-3.5 w-3.5 rounded-full transition-transform"
+                  style={{
+                    background: 'white',
+                    transform: settings.leaderboardPrompt ? 'translateX(18px)' : 'translateX(2px)',
+                  }}
+                />
               </button>
             </SettingRow>
           </Section>

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type React from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { LEADERBOARD_ENABLED, SUPABASE_ANON_KEY, SUPABASE_URL } from '../../lib/supabase';
+import { useAppStore } from '../../lib/store';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -294,6 +295,7 @@ export function SavingsDashboard({ apiUrl }: { apiUrl: string }) {
   const [emailInput, setEmailInput] = useState(localStorage.getItem(OPTIN_EMAIL_KEY) || '');
   const [nameError, setNameError] = useState('');
   const [showOptIn, setShowOptIn] = useState(false);
+  const leaderboardPrompt = useAppStore((s) => s.settings.leaderboardPrompt);
   const anonId = getOrCreateAnonId();
 
   const fetchData = useCallback(async () => {
@@ -379,13 +381,13 @@ export function SavingsDashboard({ apiUrl }: { apiUrl: string }) {
     return (
       <div style={styles.container}>
         <div style={styles.header}>
-          <h2 style={styles.title}>Savings Dashboard</h2>
+          <h2 style={styles.title}>Money saved vs. paying for cloud AI</h2>
         </div>
         <div style={styles.emptyState}>
           <div style={{ fontSize: 40, opacity: 0.4 }}>$</div>
           <div style={styles.emptyText}>
-            No savings data available.<br />
-            Start making inference requests to see savings vs cloud providers.
+            No savings yet.<br />
+            After you ask something, this shows money saved vs. paying for cloud AI.
           </div>
         </div>
       </div>
@@ -407,7 +409,7 @@ export function SavingsDashboard({ apiUrl }: { apiUrl: string }) {
 
       {/* Header */}
       <div style={styles.header}>
-        <h2 style={styles.title}>Savings Dashboard</h2>
+        <h2 style={styles.title}>Money saved vs. paying for cloud AI</h2>
         <span style={styles.liveBadge}>
           <span style={styles.liveDot} />
           Live - {REFRESH_INTERVAL_MS / 1000}s
@@ -416,8 +418,8 @@ export function SavingsDashboard({ apiUrl }: { apiUrl: string }) {
 
       {error && <div style={styles.errorBanner}>{error}</div>}
 
-      {/* Leaderboard Opt-in */}
-      {showOptIn ? (
+      {/* Leaderboard opt-in stays hidden until Settings turns it on. */}
+      {false && leaderboardPrompt && (showOptIn ? (
         <div style={{ ...styles.statCard, marginBottom: 24, padding: 20 }}>
           <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8, color: colors.text }}>
             Share Your Savings
@@ -551,7 +553,7 @@ export function SavingsDashboard({ apiUrl }: { apiUrl: string }) {
             View Leaderboard ↗
           </a>
         </div>
-      )}
+      ))}
 
       {/* Stat cards row */}
       <div style={styles.statsGrid}>
