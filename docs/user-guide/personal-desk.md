@@ -221,9 +221,21 @@ token is set.
 
 ## Worlds
 
-A world is a separate space. Jonathan starts with **Personal** and one
-business world, **Quick Funders**. Add, rename, or delete business worlds
-from the eco world. Personal cannot be deleted.
+A world is a separate space. The desk starts with Jonathan's worlds, and
+he can rename or delete the business ones. Personal cannot be deleted.
+
+- **Quick Funders** — merchant cash advance. The Quick Funders CRM project
+  lives here.
+- **JWJ / Gavco** — jewelry.
+- **Glatt Express** — kosher meat and food distribution.
+- **Personal** — his own life.
+- **Self Financial Audit** — personal finance. The Self Audit project lives
+  here.
+
+Each world has its own color and mark in the eco world. The agents on that
+world are told what the business is, so marketing for the jewelry world
+writes about jewelry. No email account is assigned until he connects one.
+The world page says **Connect email** until a Google account is attached.
 
 Each world has its own:
 

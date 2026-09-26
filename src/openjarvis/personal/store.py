@@ -24,6 +24,164 @@ def _new_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+_CATALOG_VERSION = "jonathan-1"
+_CRM_SUMMARY = (
+    "Merchant cash advance pipeline. "
+    "github.com/jonathangavriyelov-ctrl/quick-funders-crm. "
+    "Live at quick-funders-crm-kappa.vercel.app."
+)
+_AUDIT_PROJECT_SUMMARY = (
+    "Personal finance audit. "
+    "github.com/jonathangavriyelov-ctrl/self-audit. "
+    "Live at self-audit-nine.vercel.app."
+)
+_PLACEHOLDER_SUMMARIES = {
+    "",
+    "Leads, deals, and the next follow-up.",
+    "Money in, money out, and what to check.",
+    "Jonathan's own mail, calendar, notes, and goals.",
+    "The funding business: its pipeline, mail, and docs.",
+}
+
+
+def _briefs(world: str, lines: dict[str, str]) -> dict[str, str]:
+    shared = f"You work only inside {world}. Do not use another world's mail or notes."
+    return {key: f"{text} {shared}" for key, text in lines.items()}
+
+
+_WORLD_CATALOG: tuple[dict[str, Any], ...] = (
+    {
+        "name": "Quick Funders",
+        "kind": "business",
+        "mark": "advance",
+        "aliases": "mca",
+        "accent": "#1f8a70",
+        "summary": (
+            "Merchant cash advance business. Deals, funders, and the Quick Funders CRM."
+        ),
+        "higgsfield": {"marketing_content": 1},
+        "briefs": _briefs(
+            "Quick Funders",
+            {
+                "chief_of_staff": (
+                    "You run Quick Funders, a merchant cash advance business."
+                ),
+                "executive_assistant": (
+                    "Track Quick Funders deals, funder follow-ups, and deadlines."
+                ),
+                "marketing_content": (
+                    "You market Quick Funders, a merchant cash advance company. "
+                    "Write for brokers and merchants about funding."
+                ),
+                "second_brain": (
+                    "Remember Quick Funders deals, funders, and CRM notes."
+                ),
+            },
+        ),
+    },
+    {
+        "name": "JWJ / Gavco",
+        "kind": "business",
+        "mark": "gem",
+        "aliases": "jwj, gavco",
+        "accent": "#c6a15b",
+        "summary": "Jewelry business. Pieces, clients, and the bench.",
+        "higgsfield": {"marketing_content": 1},
+        "briefs": _briefs(
+            "JWJ / Gavco",
+            {
+                "chief_of_staff": "You run JWJ / Gavco, a jewelry business.",
+                "executive_assistant": (
+                    "Keep the jewelry bench, client orders, and appointments on track."
+                ),
+                "marketing_content": (
+                    "You market JWJ / Gavco, a jewelry business. "
+                    "Write about pieces, clients, and the bench."
+                ),
+                "second_brain": "Remember jewelry clients, pieces, and orders.",
+            },
+        ),
+    },
+    {
+        "name": "Glatt Express",
+        "kind": "business",
+        "mark": "market",
+        "aliases": "glatt",
+        "accent": "#8c2f39",
+        "summary": "Kosher meat and food distribution.",
+        "higgsfield": {"marketing_content": 1},
+        "briefs": _briefs(
+            "Glatt Express",
+            {
+                "chief_of_staff": (
+                    "You run Glatt Express, a kosher meat distribution business."
+                ),
+                "executive_assistant": (
+                    "Track Glatt Express orders, deliveries, and shop follow-ups."
+                ),
+                "marketing_content": (
+                    "You market Glatt Express, a kosher meat and food distributor. "
+                    "Write about product, delivery, and kashrut."
+                ),
+                "second_brain": (
+                    "Remember Glatt Express products, shops, and deliveries."
+                ),
+            },
+        ),
+    },
+    {
+        "name": "Personal",
+        "kind": "personal",
+        "mark": "home",
+        "aliases": "",
+        "accent": "#7eb6e0",
+        "summary": "Jonathan's own life, calendar, and private notes.",
+        "higgsfield": {"marketing_content": 1},
+        "briefs": _briefs(
+            "Personal",
+            {
+                "chief_of_staff": (
+                    "You run Jonathan's personal life, not his businesses."
+                ),
+                "executive_assistant": (
+                    "This is Jonathan's personal calendar and private goals."
+                ),
+                "marketing_content": (
+                    "This is Jonathan's personal life, not a company. "
+                    "Keep any words private."
+                ),
+                "second_brain": "Remember personal notes. Leave the businesses out.",
+            },
+        ),
+    },
+    {
+        "name": "Self Financial Audit",
+        "kind": "finance",
+        "mark": "ledger",
+        "aliases": "self audit, personal finance",
+        "accent": "#c4a15a",
+        "summary": ("Personal finance audit. The related project is Self Audit."),
+        "higgsfield": {"marketing_content": 0},
+        "briefs": _briefs(
+            "Self Financial Audit",
+            {
+                "chief_of_staff": (
+                    "You run Jonathan's personal finance audit, not a sales desk."
+                ),
+                "executive_assistant": (
+                    "Track money in, money out, and what still needs a check."
+                ),
+                "marketing_content": (
+                    "This is a personal finance audit, not a public brand. "
+                    "Write plain internal notes."
+                ),
+                "second_brain": "Store personal-finance findings for the Self Audit.",
+            },
+        ),
+    },
+)
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS goals (
     id TEXT PRIMARY KEY,
@@ -145,6 +303,8 @@ CREATE TABLE IF NOT EXISTS worlds (
     kind TEXT NOT NULL DEFAULT 'business',
     summary TEXT NOT NULL DEFAULT '',
     accent TEXT NOT NULL DEFAULT '#7dcea0',
+    mark TEXT NOT NULL DEFAULT '',
+    aliases TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -154,6 +314,7 @@ CREATE TABLE IF NOT EXISTS world_team (
     enabled INTEGER NOT NULL DEFAULT 1,
     omniroute_model TEXT NOT NULL DEFAULT '',
     higgsfield INTEGER NOT NULL DEFAULT 0,
+    brief TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (world_id, specialist_id)
 );
 CREATE TABLE IF NOT EXISTS google_accounts (
@@ -197,6 +358,9 @@ class PersonalStore:
             "ALTER TABLE notes ADD COLUMN world_id TEXT",
             "ALTER TABLE deliverables ADD COLUMN world_id TEXT",
             "ALTER TABLE proposals ADD COLUMN world_id TEXT",
+            "ALTER TABLE worlds ADD COLUMN mark TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE worlds ADD COLUMN aliases TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE world_team ADD COLUMN brief TEXT NOT NULL DEFAULT ''",
         ):
             try:
                 self._conn.execute(statement)
@@ -786,14 +950,14 @@ class PersonalStore:
                 return
         self.create_project(
             "Quick Funders CRM",
-            summary="Leads, deals, and the next follow-up.",
-            accent="#7dcea0",
+            summary=_CRM_SUMMARY,
+            accent="#1f8a70",
             example=True,
         )
         self.create_project(
             "Self Audit",
-            summary="Money in, money out, and what to check.",
-            accent="#f5c16c",
+            summary=_AUDIT_PROJECT_SUMMARY,
+            accent="#c4a15a",
             example=True,
         )
 
@@ -905,27 +1069,86 @@ class PersonalStore:
     )
 
     def ensure_worlds(self) -> None:
-        """Seed Personal and Quick Funders once, then keep new rows on a world."""
-        if self.get_setting("worlds_seeded") == "1":
+        """Seed Jonathan's worlds once, and fill any that an older desk missed."""
+        if self.get_setting("worlds_catalog") == _CATALOG_VERSION:
             return
-        personal = self.create_world(
-            "Personal",
-            kind="personal",
-            summary="Jonathan's own mail, calendar, notes, and goals.",
-            accent="#9ec9f5",
-        )
-        funders = self.create_world(
-            "Quick Funders",
-            kind="business",
-            summary="The funding business: its pipeline, mail, and docs.",
-            accent="#7dcea0",
-        )
+        by_name = {world["name"]: world for world in self.list_worlds()}
+        ids: dict[str, str] = {}
+        for spec in _WORLD_CATALOG:
+            current = by_name.get(spec["name"])
+            if current is None:
+                created = self.create_world(
+                    spec["name"],
+                    kind=spec["kind"],
+                    summary=spec["summary"],
+                    accent=spec["accent"],
+                    mark=spec["mark"],
+                    aliases=spec["aliases"],
+                    briefs=spec["briefs"],
+                    higgsfield=spec["higgsfield"],
+                )
+                ids[spec["name"]] = created["id"]
+            else:
+                ids[spec["name"]] = current["id"]
+                self._refresh_catalog_world(current, spec)
+        self._assign_catalog_projects(ids)
+        personal_id = ids.get("Personal") or ""
+        if personal_id:
+            self._backfill_world(personal_id)
+        self.set_setting("worlds_seeded", "1")
+        self.set_setting("worlds_catalog", _CATALOG_VERSION)
+
+    def _refresh_catalog_world(
+        self, current: dict[str, Any], spec: dict[str, Any]
+    ) -> None:
+        """Fill identity on a world that was seeded before this catalog."""
+        fields: dict[str, str] = {}
+        old_summary = (current.get("summary") or "").strip()
+        if old_summary in _PLACEHOLDER_SUMMARIES or not old_summary:
+            fields["summary"] = spec["summary"]
+            fields["accent"] = spec["accent"]
+        if not (current.get("mark") or "").strip():
+            fields["mark"] = spec["mark"]
+        if not (current.get("aliases") or "").strip():
+            fields["aliases"] = spec["aliases"]
+        if fields:
+            self.update_world(current["id"], **fields)
+        briefs = spec["briefs"]
+        higgs = spec["higgsfield"]
+        for row in self.team(current["id"]):
+            if (row.get("brief") or "").strip():
+                continue
+            self.update_team(
+                current["id"],
+                row["specialist_id"],
+                brief=briefs.get(row["specialist_id"], ""),
+                higgsfield=bool(higgs.get(row["specialist_id"], row["higgsfield"])),
+            )
+
+    def _assign_catalog_projects(self, ids: dict[str, str]) -> None:
+        personal_id = ids.get("Personal") or ""
+        funders_id = ids.get("Quick Funders") or personal_id
+        audit_id = ids.get("Self Financial Audit") or personal_id
         for project in self.list_projects():
             name = project["name"].lower()
-            target = funders["id"] if "quick funders" in name else personal["id"]
+            if "quick funders" in name and funders_id:
+                target = funders_id
+                summary = _CRM_SUMMARY
+                accent = "#1f8a70"
+            elif "self audit" in name and audit_id:
+                target = audit_id
+                summary = _AUDIT_PROJECT_SUMMARY
+                accent = "#c4a15a"
+            elif not project.get("world_id") and personal_id:
+                target = personal_id
+                summary = ""
+                accent = ""
+            else:
+                continue
             self.set_project_world(project["id"], target)
-        self._backfill_world(personal["id"])
-        self.set_setting("worlds_seeded", "1")
+            old = (project.get("summary") or "").strip()
+            if summary and old in _PLACEHOLDER_SUMMARIES:
+                self.update_project(project["id"], summary=summary, accent=accent)
 
     def create_world(
         self,
@@ -934,21 +1157,48 @@ class PersonalStore:
         kind: str = "business",
         summary: str = "",
         accent: str = "#7dcea0",
+        mark: str = "",
+        aliases: str = "",
+        briefs: dict[str, str] | None = None,
+        higgsfield: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         world_id = _new_id()
         now = _now()
-        kind_name = "personal" if kind == "personal" else "business"
+        if kind == "personal":
+            kind_name = "personal"
+        elif kind == "finance":
+            kind_name = "finance"
+        else:
+            kind_name = "business"
+        notes = briefs or {}
+        pictures = higgsfield or {}
         with self._lock:
             self._conn.execute(
-                "INSERT INTO worlds (id, name, kind, summary, accent, "
-                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (world_id, name.strip(), kind_name, summary.strip(), accent, now, now),
+                "INSERT INTO worlds (id, name, kind, summary, accent, mark, "
+                "aliases, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    world_id,
+                    name.strip(),
+                    kind_name,
+                    summary.strip(),
+                    accent,
+                    mark,
+                    aliases,
+                    now,
+                    now,
+                ),
             )
-            for specialist_id, higgsfield in self._TEAM_SEED:
+            for specialist_id, default_picture in self._TEAM_SEED:
+                picture = pictures.get(specialist_id, default_picture)
                 self._conn.execute(
                     "INSERT INTO world_team (world_id, specialist_id, enabled, "
-                    "omniroute_model, higgsfield) VALUES (?, ?, 1, '', ?)",
-                    (world_id, specialist_id, higgsfield),
+                    "omniroute_model, higgsfield, brief) VALUES (?, ?, 1, '', ?, ?)",
+                    (
+                        world_id,
+                        specialist_id,
+                        int(picture),
+                        notes.get(specialist_id, ""),
+                    ),
                 )
             self._conn.commit()
         world = self.get_world(world_id)
@@ -982,18 +1232,23 @@ class PersonalStore:
 
         lowered = (text or "").lower()
         found: dict[str, Any] | None = None
+        found_len = -1
         for world in self.list_worlds():
-            name = world["name"].strip().lower()
-            if not name:
-                continue
-            if re.search(rf"\b{re.escape(name)}\b", lowered) and (
-                found is None or len(name) > len(found["name"])
-            ):
-                found = world
+            extra = world.get("aliases") or ""
+            labels = [world["name"], *[part.strip() for part in extra.split(",")]]
+            for label in labels:
+                name = label.strip().lower()
+                if not name:
+                    continue
+                if re.search(rf"\b{re.escape(name)}\b", lowered) and (
+                    found is None or len(name) > found_len
+                ):
+                    found = world
+                    found_len = len(name)
         return found
 
     def update_world(self, world_id: str, **fields: Any) -> dict[str, Any] | None:
-        allowed = ("name", "summary", "accent")
+        allowed = ("name", "summary", "accent", "mark", "aliases")
         sets: list[str] = []
         values: list[Any] = []
         for key in allowed:
@@ -1113,11 +1368,19 @@ class PersonalStore:
         enabled = 1 if fields.get("enabled", current["enabled"]) else 0
         higgsfield = 1 if fields.get("higgsfield", current["higgsfield"]) else 0
         model = fields.get("omniroute_model", current["omniroute_model"])
+        brief = fields.get("brief", current.get("brief") or "")
         with self._lock:
             self._conn.execute(
                 "UPDATE world_team SET enabled = ?, omniroute_model = ?, "
-                "higgsfield = ? WHERE world_id = ? AND specialist_id = ?",
-                (enabled, str(model or ""), higgsfield, world_id, specialist_id),
+                "higgsfield = ?, brief = ? WHERE world_id = ? AND specialist_id = ?",
+                (
+                    enabled,
+                    str(model or ""),
+                    higgsfield,
+                    str(brief or ""),
+                    world_id,
+                    specialist_id,
+                ),
             )
             self._conn.commit()
         return next(

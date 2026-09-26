@@ -34,6 +34,7 @@ export interface PersonalAgent {
   enabled?: boolean;
   higgsfield_enabled?: boolean;
   omniroute_model?: string;
+  brief?: string;
   tasks?: PersonalTask[];
   deliverables?: Deliverable[];
   skills_detail?: { name: string; description: string }[];
@@ -206,6 +207,7 @@ export interface DeskWorld {
   kind: 'personal' | 'business' | string;
   summary: string;
   accent: string;
+  mark?: string;
   project_count: number;
   goal_count: number;
   agent_count: number;
@@ -218,6 +220,7 @@ export interface TeamMember {
   enabled: boolean;
   omniroute_model: string;
   higgsfield: boolean;
+  brief?: string;
 }
 
 export interface Proposal {
@@ -323,7 +326,7 @@ export const deleteWorld = (id: string) =>
 export const updateTeamMember = (
   worldId: string,
   specialistId: string,
-  patch: { enabled?: boolean; omniroute_model?: string; higgsfield?: boolean },
+  patch: { enabled?: boolean; omniroute_model?: string; higgsfield?: boolean; brief?: string },
 ) =>
   read<TeamMember>(`/v1/personal/worlds/${worldId}/team/${specialistId}`, {
     method: 'PUT',

@@ -41,6 +41,58 @@ function plotSpot(index: number, count: number) {
   return start + (index * span) / (count - 1);
 }
 
+const TRADES: Record<string, string> = {
+  advance: 'MCA',
+  gem: 'Jewelry',
+  market: 'Kosher meat',
+  home: 'Personal',
+  ledger: 'Personal finance',
+};
+
+function tradeOf(world: { kind?: string; mark?: string }) {
+  if (world.mark && TRADES[world.mark]) return TRADES[world.mark];
+  if (world.kind === 'finance') return 'Personal finance';
+  if (world.kind === 'personal') return 'Personal';
+  return 'Business';
+}
+
+function PlanetMark({ mark }: { mark?: string }) {
+  if (mark === 'gem') {
+    return (
+      <svg className="planet-mark" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 2 20 9 12 22 4 9Z" />
+      </svg>
+    );
+  }
+  if (mark === 'market') {
+    return (
+      <svg className="planet-mark" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3c2 4 6 5 8 8-3 1-5 4-8 10-3-6-5-9-8-10 2-3 6-4 8-8Z" />
+      </svg>
+    );
+  }
+  if (mark === 'home') {
+    return (
+      <svg className="planet-mark" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 11 12 4l8 7v9H4Z" />
+      </svg>
+    );
+  }
+  if (mark === 'ledger') {
+    return (
+      <svg className="planet-mark" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M6 3h12v18H6Z" />
+        <path d="M9 8h6M9 12h6M9 16h4" />
+      </svg>
+    );
+  }
+  return (
+    <svg className="planet-mark" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 18V10M10 18V6M16 18v-5M22 18H2" />
+    </svg>
+  );
+}
+
 function planetSpot(index: number, count: number) {
   const angle = -Math.PI / 2 + (index * 2 * Math.PI) / Math.max(count, 1);
   return { x: 50 + Math.cos(angle) * 32, y: 48 + Math.sin(angle) * 30 };
@@ -173,16 +225,17 @@ export function WorldPage() {
               <button
                 key={planet.id}
                 type="button"
-                className="planet"
-                style={{ left: `${spot.x}%`, top: `${spot.y}%`, borderColor: planet.accent }}
+                className={`planet is-${planet.mark || 'advance'}`}
+                style={{ left: `${spot.x}%`, top: `${spot.y}%`, borderColor: planet.accent, color: planet.accent }}
                 onClick={() => setDeskWorld(planet.id)}
               >
-                <span className="planet-glow" style={{ background: planet.accent }} />
+                <PlanetMark mark={planet.mark} />
                 <strong>{planet.name}</strong>
-                <em>{planet.kind === 'personal' ? 'Personal' : 'Business'}</em>
+                <em>{tradeOf(planet)}</em>
                 <small>
                   {planet.project_count} projects · {planet.goal_count} goals · {planet.agent_count} agents
                 </small>
+                {planet.accounts.length === 0 && <span className="planet-mail">Connect email</span>}
               </button>
             );
           })}
@@ -469,6 +522,16 @@ export function WorldPage() {
               </label>
               <input
                 className="os-field"
+                defaultValue={agent.brief || ''}
+                placeholder="What this helper knows about the world"
+                onBlur={async (event) => {
+                  if ((event.target.value || '') === (agent.brief || '')) return;
+                  await updateTeamMember(deskWorld, agent.id, { brief: event.target.value });
+                  await reload();
+                }}
+              />
+              <input
+                className="os-field"
                 defaultValue={agent.omniroute_model || ''}
                 placeholder="OmniRoute model"
                 onBlur={async (event) => {
@@ -487,6 +550,11 @@ export function WorldPage() {
           <h2>{eli5 ? 'Mail for this world' : 'Google accounts'}</h2>
           <span className="muted">Point at a credentials file that lives outside this repository.</span>
         </div>
+        {(world?.accounts ?? []).length === 0 && (
+          <p className="connect-mail" role="status">
+            Connect email for {world?.world?.name || 'this world'}. No Google account is assigned yet.
+          </p>
+        )}
         <ul className="team-list">
           {(world?.accounts ?? []).map((account) => (
             <li key={account.id}>

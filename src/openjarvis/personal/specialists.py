@@ -46,6 +46,7 @@ class ProduceContext:
     goals: list[Mapping[str, Any]] = field(default_factory=list)
     eli5: bool = False
     persona_note: str = ""
+    world_note: str = ""
     google_briefing: str = ""
 
 
@@ -121,6 +122,13 @@ def _goals_block(goals: list[Mapping[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _with_world(body: str, ctx: ProduceContext) -> str:
+    note = (ctx.world_note or "").strip()
+    if not note or ctx.model_text:
+        return body
+    return f"{body.rstrip()}\n\n## This world\n{note}"
+
+
 def _produce_executive(ctx: ProduceContext) -> Produced:
     goal = propose_goal(ctx.request)
     title = "Priorities and pace"
@@ -175,6 +183,7 @@ def _produce_executive(ctx: ProduceContext) -> Produced:
         body = "\n".join(parts)
     if ctx.google_briefing.strip() and not ctx.model_text:
         body = f"{body.rstrip()}\n\n{ctx.google_briefing.strip()}"
+    body = _with_world(body, ctx)
     note = None
     if looks_like_goal(ctx.request) and goal:
         note = {
@@ -231,6 +240,7 @@ def _produce_marketing(ctx: ProduceContext) -> Produced:
                 "Add variants only after the first draft exists.",
             ]
         )
+    body = _with_world(body, ctx)
     return Produced(
         title=title,
         kind="content",
@@ -281,6 +291,7 @@ def _produce_second_brain(ctx: ProduceContext) -> Produced:
                 remembered,
             ]
         )
+    body = _with_world(body, ctx)
     return Produced(
         title=title,
         kind="knowledge",

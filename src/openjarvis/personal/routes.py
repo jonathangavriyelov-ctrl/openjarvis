@@ -99,6 +99,7 @@ class TeamUpdateRequest(BaseModel):
     enabled: Optional[bool] = None
     omniroute_model: Optional[str] = None
     higgsfield: Optional[bool] = None
+    brief: Optional[str] = None
 
 
 class AccountRequest(BaseModel):

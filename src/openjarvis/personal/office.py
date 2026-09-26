@@ -326,6 +326,9 @@ class PersonalOffice:
             self._turn.get("command"),
             eli5=bool(self._turn.get("eli5")),
         )
+        world_note = self._team_brief(specialist_id)
+        if world_note:
+            extra = f"{extra}\n\nThis world:\n{world_note}".strip()
         messages = [
             Message(role=Role.SYSTEM, content=render_system_prompt(spec, extra=extra)),
             Message(role=Role.USER, content=user_text),
@@ -558,6 +561,8 @@ class PersonalOffice:
             "kind": world["kind"],
             "summary": world.get("summary") or "",
             "accent": world.get("accent") or "#7dcea0",
+            "mark": world.get("mark") or "",
+            "aliases": world.get("aliases") or "",
             "project_count": len(self.store.list_projects(world_id)),
             "goal_count": len(self.store.list_goals(world_id)),
             "agent_count": sum(1 for row in team if row.get("enabled")),
@@ -575,7 +580,17 @@ class PersonalOffice:
         accent: str = "#7dcea0",
         kind: str = "business",
     ) -> dict[str, Any]:
-        world = self.store.create_world(name, kind=kind, summary=summary, accent=accent)
+        note = f"This world is {name.strip()}."
+        if summary.strip():
+            note = f"{note} {summary.strip()}"
+        briefs = {spec_id: note for spec_id, _picture in self.store._TEAM_SEED}
+        world = self.store.create_world(
+            name,
+            kind=kind,
+            summary=summary,
+            accent=accent,
+            briefs=briefs,
+        )
         return self._world_card(world)
 
     def rename_world(self, world_id: str, **fields: Any) -> dict[str, Any] | None:
@@ -631,6 +646,15 @@ class PersonalOffice:
             if row is None or row.get("enabled", True):
                 roster.append(spec)
         return roster
+
+    def _team_brief(self, specialist_id: str) -> str:
+        world_id = str(self._turn.get("world_id") or "")
+        if not world_id or world_id == OVERALL:
+            return ""
+        for row in self.store.team(world_id):
+            if row["specialist_id"] == specialist_id:
+                return str(row.get("brief") or "")
+        return ""
 
     def _higgsfield_on(self, world_id: str, specialist_id: str) -> bool:
         for row in self.store.team(world_id):
@@ -1036,6 +1060,7 @@ class PersonalOffice:
                 eli5=bool(self._turn.get("eli5")),
                 persona_note=getattr(command, "instructions", "") or "",
                 google_briefing=briefing,
+                world_note=self._team_brief(spec.id),
             ),
         )
         project_id = task.get("project_id") or ""
@@ -1134,6 +1159,7 @@ class PersonalOffice:
                 member.get("higgsfield", spec.id == "marketing_content")
             )
             row["omniroute_model"] = member.get("omniroute_model") or ""
+            row["brief"] = member.get("brief") or ""
             routed_models = choices.get("agents") or {}
             if spec.id in routed_models:
                 row["model"] = routed_models[spec.id]

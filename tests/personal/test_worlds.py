@@ -31,7 +31,15 @@ def _world(office: PersonalOffice, name: str) -> dict:
 def test_seed_create_rename_and_keep_personal(tmp_path):
     office = PersonalOffice(tmp_path / "os.db")
     names = {world["name"] for world in office.store.list_worlds()}
-    assert names == {"Personal", "Quick Funders"}
+    assert names == {
+        "Quick Funders",
+        "JWJ / Gavco",
+        "Glatt Express",
+        "Personal",
+        "Self Financial Audit",
+    }
+    marks = {world["mark"] for world in office.store.list_worlds()}
+    assert marks == {"advance", "gem", "market", "home", "ledger"}
     personal = _world(office, "Personal")
     assert office.delete_world(personal["id"]) == "personal"
     assert office.store.get_world(personal["id"]) is not None
@@ -106,6 +114,31 @@ def test_google_account_view_hides_the_secret(tmp_path):
     office.close()
 
 
+def test_jewelry_marketing_knows_the_business_and_mail_is_unassigned(tmp_path):
+    office = PersonalOffice(tmp_path / "os.db")
+    gavco = _world(office, "JWJ / Gavco")
+    assert office.store.list_google_accounts(gavco["id"]) == []
+    detail = office.run_mission("Draft a launch post for Gavco")
+    assert detail["world_id"] == gavco["id"]
+    marketing = next(
+        item
+        for item in detail["deliverables"]
+        if item["specialist_id"] == "marketing_content"
+    )
+    assert "jewelry" in marketing["body"].lower()
+    glatt = _world(office, "Glatt Express")
+    meat = office.run_mission("Draft a post for Glatt")
+    assert meat["world_id"] == glatt["id"]
+    meat_copy = next(
+        item
+        for item in meat["deliverables"]
+        if item["specialist_id"] == "marketing_content"
+    )
+    assert "kosher" in meat_copy["body"].lower()
+    assert "jewelry" not in meat_copy["body"].lower()
+    office.close()
+
+
 def test_disabling_marketing_drops_it_from_the_plan(tmp_path):
     office = PersonalOffice(tmp_path / "os.db")
     funders = _world(office, "Quick Funders")
@@ -128,13 +161,20 @@ def test_examples_stay_listed_and_worlds_split_them(tmp_path):
     assert names == ["Quick Funders CRM", "Self Audit"]
     by_name = {project["name"]: project for project in office.store.list_projects()}
     funders = _world(office, "Quick Funders")
-    personal = _world(office, "Personal")
+    audit = _world(office, "Self Financial Audit")
     assert by_name["Quick Funders CRM"]["world_id"] == funders["id"]
-    assert by_name["Self Audit"]["world_id"] == personal["id"]
+    assert "quick-funders-crm" in by_name["Quick Funders CRM"]["summary"]
+    assert by_name["Self Audit"]["world_id"] == audit["id"]
+    assert "self-audit" in by_name["Self Audit"]["summary"]
     archipelago = office.world(scope="all")
     assert archipelago["projects"] == []
     assert {card["name"] for card in archipelago["worlds"]} == {
         "Personal",
         "Quick Funders",
+        "JWJ / Gavco",
+        "Glatt Express",
+        "Self Financial Audit",
     }
+    for card in archipelago["worlds"]:
+        assert card["accounts"] == []
     office.close()
