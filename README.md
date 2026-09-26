@@ -52,6 +52,22 @@ Then `jarvis` to start. The Rust extension and larger models continue downloadin
 
 Platform-specific notes (WSL2 setup, native-Windows scheduled-task service, desktop prerequisites, manual / contributor install): see the [installation docs](https://open-jarvis.github.io/OpenJarvis/getting-started/install/).
 
+## Personal AI OS
+
+One command starts the API and the dashboard, then prints the address. No API keys are required.
+
+```bash
+make os
+```
+
+Open the URL it prints, usually [http://127.0.0.1:5173/os/world](http://127.0.0.1:5173/os/world). `scripts/os-up.sh` is the same command.
+
+On an Apple Silicon Mac with Ollama, the Executive Assistant uses `hermes3:8b`. If that model is not installed, it uses another local model (`qwen3.5:4b` when you have it). The Chief of Staff uses OmniRoute when `OMNIROUTE_BASE_URL` is set, and Ollama otherwise. The desk still opens when Ollama is off: the agents answer from their offline notes.
+
+```bash
+ollama pull hermes3:8b
+```
+
 ## Quick Start
 
 ```bash

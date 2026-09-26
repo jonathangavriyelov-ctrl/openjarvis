@@ -1,4 +1,28 @@
-# Personal desk: Google and your phone
+# Personal desk
+
+## Start it
+
+From the repo:
+
+```bash
+make os
+```
+
+That starts the API and the dashboard and prints the address, usually
+http://127.0.0.1:5173/os/world . The same command is `scripts/os-up.sh`.
+No API keys are required.
+
+The Executive Assistant uses `hermes3:8b` on Ollama when that model is
+installed. If it is not, it uses another local model, preferring
+`qwen3.5:4b`. The Chief of Staff uses OmniRoute when `OMNIROUTE_BASE_URL`
+is set, and the local model otherwise. If Ollama is not running, the desk
+still opens and the agents use their offline notes.
+
+```bash
+ollama pull hermes3:8b
+```
+
+## Google and your phone
 
 The personal desk is the Chief of Staff page. Two connections make it useful
 away from the laptop: Google, so the Executive Assistant can see the day, and
@@ -319,9 +343,10 @@ A monthly cap for the whole desk, and one per world, warns at 80 percent.
 Past that, the next model call goes through OmniRoute on a cheaper model.
 If even the cheap call would pass the cap, the paid model is not called.
 
-Planning uses the strongest OmniRoute model. The Executive Assistant uses
-Hermes 3. Hermes 4 is not used for tool-calling. Notes and classification
-use a cheap, fast model.
+Planning uses the strongest OmniRoute model when that gateway is configured,
+and a local model otherwise. The Executive Assistant stays on Ollama
+(`hermes3:8b`, or another local model such as `qwen3.5:4b`). Hermes 4 is
+not used for tool-calling. Notes and classification use a cheap, fast model.
 
 Quick Funders playbooks follow up leads and nudge the pipeline. JWJ / Gavco
 and Glatt Express draft content and customer re-engagement. Outbound messages
