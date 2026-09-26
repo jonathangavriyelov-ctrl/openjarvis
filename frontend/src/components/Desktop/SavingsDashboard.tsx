@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type React from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { LEADERBOARD_ENABLED, SUPABASE_ANON_KEY, SUPABASE_URL } from '../../lib/supabase';
+import { useAppStore } from '../../lib/store';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -294,6 +295,7 @@ export function SavingsDashboard({ apiUrl }: { apiUrl: string }) {
   const [emailInput, setEmailInput] = useState(localStorage.getItem(OPTIN_EMAIL_KEY) || '');
   const [nameError, setNameError] = useState('');
   const [showOptIn, setShowOptIn] = useState(false);
+  const leaderboardPrompt = useAppStore((s) => s.settings.leaderboardPrompt);
   const anonId = getOrCreateAnonId();
 
   const fetchData = useCallback(async () => {
@@ -416,8 +418,8 @@ export function SavingsDashboard({ apiUrl }: { apiUrl: string }) {
 
       {error && <div style={styles.errorBanner}>{error}</div>}
 
-      {/* Leaderboard Opt-in */}
-      {showOptIn ? (
+      {/* Leaderboard opt-in stays hidden until Settings turns it on. */}
+      {leaderboardPrompt && (showOptIn ? (
         <div style={{ ...styles.statCard, marginBottom: 24, padding: 20 }}>
           <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8, color: colors.text }}>
             Share Your Savings
@@ -551,7 +553,7 @@ export function SavingsDashboard({ apiUrl }: { apiUrl: string }) {
             View Leaderboard ↗
           </a>
         </div>
-      )}
+      ))}
 
       {/* Stat cards row */}
       <div style={styles.statsGrid}>

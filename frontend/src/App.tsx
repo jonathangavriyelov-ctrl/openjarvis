@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Routes, Route } from 'react-router';
+import { Routes, Route, useLocation } from 'react-router';
 import { Layout } from './components/Layout';
 import { ChatPage } from './pages/ChatPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -55,6 +55,8 @@ export default function App() {
   const setOptInModalOpen = useAppStore((s) => s.setOptInModalOpen);
   const markOptInModalSeen = useAppStore((s) => s.markOptInModalSeen);
   const savings = useAppStore((s) => s.savings);
+  const location = useLocation();
+  const onPersonalDesk = location.pathname.startsWith('/os');
 
   // Apply theme class to <html>
   useEffect(() => {
@@ -126,13 +128,20 @@ export default function App() {
     return () => clearInterval(interval);
   }, [optInEnabled, optInDisplayName, optInAnonId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Show opt-in modal on first visit
+  // The personal desk never auto-opens the leaderboard prompt. Elsewhere,
+  // the first visit can still offer it. A settings toggle is the only way
+  // to open it from /os/*.
   useEffect(() => {
+    if (onPersonalDesk) {
+      setOptInModalOpen(false);
+      if (!optInModalSeen) markOptInModalSeen();
+      return;
+    }
     if (!optInModalSeen) {
       setOptInModalOpen(true);
       markOptInModalSeen();
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [onPersonalDesk]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fire model_changed when the user switches models. First mount is
   // not a "change" — only emit when both prev and current are real and
@@ -212,7 +221,7 @@ export default function App() {
       </Routes>
       <Toaster position="bottom-right" />
       {commandPaletteOpen && <CommandPalette />}
-      {optInModalOpen && (
+      {optInModalOpen && !onPersonalDesk && (
         <OptInModal onClose={() => setOptInModalOpen(false)} />
       )}
     </>

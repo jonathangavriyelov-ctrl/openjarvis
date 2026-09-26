@@ -821,6 +821,45 @@ export function SettingsPage() {
             </SettingRow>
           </Section>
 
+          <Section title="Leaderboard">
+            <SettingRow
+              label="Share Your Savings"
+              description="Off by default. The personal desk does not show the leaderboard prompt until this is on."
+            >
+              <button
+                type="button"
+                aria-pressed={settings.leaderboardPrompt}
+                onClick={() => {
+                  const next = !settings.leaderboardPrompt;
+                  updateSettings({ leaderboardPrompt: next });
+                  useAppStore.getState().setOptInModalOpen(next);
+                }}
+                className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
+                style={{ background: settings.leaderboardPrompt ? 'var(--color-accent)' : 'var(--color-bg-tertiary)', border: '1px solid var(--color-border)' }}
+              >
+                <span
+                  className="inline-block h-3.5 w-3.5 rounded-full transition-transform"
+                  style={{
+                    background: 'white',
+                    transform: settings.leaderboardPrompt ? 'translateX(18px)' : 'translateX(2px)',
+                  }}
+                />
+              </button>
+            </SettingRow>
+            {settings.leaderboardPrompt && (
+              <div className="pt-3">
+                <button
+                  type="button"
+                  onClick={() => useAppStore.getState().setOptInModalOpen(true)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium"
+                  style={{ background: 'var(--color-bg-tertiary)', border: '1px solid var(--color-border)', color: 'var(--color-text)', cursor: 'pointer' }}
+                >
+                  Open the opt-in
+                </button>
+              </div>
+            )}
+          </Section>
+
           {/* About */}
           <Section title="About">
             <div className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>

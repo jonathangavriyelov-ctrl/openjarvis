@@ -38,6 +38,7 @@ export function SystemPanel() {
   const savings = useAppStore((s) => s.savings);
   const toggleSystemPanel = useAppStore((s) => s.toggleSystemPanel);
   const optInEnabled = useAppStore((s) => s.optInEnabled);
+  const leaderboardPrompt = useAppStore((s) => s.settings.leaderboardPrompt);
   const setOptInModalOpen = useAppStore((s) => s.setOptInModalOpen);
   const liveEnergy = useAppStore((s) => s.liveEnergy);
   const [energy, setEnergy] = useState<EnergyData | null>(null);
@@ -210,8 +211,8 @@ export function SystemPanel() {
 
         </section>
 
-        {/* Leaderboard / Share */}
-        <section>
+        {/* Leaderboard stays hidden until Settings turns the prompt on. */}
+        {leaderboardPrompt && <section>
           <h4
             className="text-[11px] font-medium uppercase tracking-wide mb-2"
             style={{ color: 'var(--color-text-tertiary)' }}
@@ -268,7 +269,7 @@ export function SystemPanel() {
             <ExternalLink size={10} />
             View Leaderboard
           </a>
-        </section>
+        </section>}
       </div>
     </div>
   );

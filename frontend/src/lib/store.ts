@@ -106,6 +106,8 @@ interface Settings {
   temperature: number;
   maxTokens: number;
   speechEnabled: boolean;
+  // Personal desk: the Share Your Savings prompt stays hidden until this is on.
+  leaderboardPrompt: boolean;
 }
 
 function loadSettings(): Settings {
@@ -119,6 +121,7 @@ function loadSettings(): Settings {
     temperature: 0.7,
     maxTokens: 4096,
     speechEnabled: false,
+    leaderboardPrompt: false,
   };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
