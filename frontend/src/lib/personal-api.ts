@@ -215,6 +215,54 @@ export interface DeskWorld {
   agent_count: number;
   knowledge_count?: number;
   accounts: GoogleAccountView[];
+  roi?: RoiLine;
+}
+
+export interface RoiLine {
+  cost: number;
+  value: number;
+  net: number;
+  paying: boolean;
+  alert: string;
+}
+
+export interface RoiWorld extends RoiLine {
+  id: string;
+  name: string;
+  revenue: number;
+  hours_saved: number;
+  time_value: number;
+  llm: number;
+  higgsfield: number;
+  recurring: number;
+  budget: number;
+  roi: number | null;
+}
+
+export interface RoiReport {
+  month: string;
+  overall: Omit<RoiWorld, 'id' | 'name'>;
+  worlds: RoiWorld[];
+  agents: {
+    world_id: string;
+    world_name: string;
+    specialist_id: string;
+    agent_name: string;
+    cost: number;
+    input_tokens: number;
+    output_tokens: number;
+  }[];
+  alerts: { id: string; world_id: string; level: string; message: string }[];
+  gateway: { cost: number; range: string } | null;
+  settings: {
+    hourly_rate: number;
+    minutes_per_task: number;
+    budgets: { overall: number; worlds: Record<string, number> };
+    prices: Record<string, unknown>;
+    recurring: { name?: string; amount?: number; world_id?: string }[];
+    strong_model: string;
+    cheap_model: string;
+  };
 }
 
 export interface KnowledgeRoute {
@@ -597,6 +645,14 @@ export const rejectProposal = (id: string) =>
   read<Proposal>(`/v1/personal/proposals/${id}/reject`, { method: 'POST' });
 
 export const fetchPhone = () => read<PhoneStatus>('/v1/personal/phone');
+
+export const fetchRoi = () => read<RoiReport>('/v1/personal/roi');
+
+export const addRevenue = (body: { world_id: string; amount: number; note?: string; source?: string }) =>
+  read<RoiReport>('/v1/personal/roi/revenue', { method: 'POST', body: JSON.stringify(body) });
+
+export const saveRoiSettings = (body: Partial<RoiReport['settings']>) =>
+  read<RoiReport>('/v1/personal/roi/settings', { method: 'PUT', body: JSON.stringify(body) });
 
 export const pullDrive = (query: string, worldId?: string | null) =>
   read<{

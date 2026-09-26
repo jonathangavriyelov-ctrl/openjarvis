@@ -116,7 +116,7 @@ def test_missing_hermes_uses_auto_on_omniroute(tmp_path):
     choice = office.model_choices()["agents"]["executive_assistant"]
     assert choice["route"] == "omniroute"
     assert choice["model_id"] == "auto"
-    assert "not in its catalog" in choice["detail"]
+    assert "not in the OmniRoute catalog" in choice["detail"]
     office.close()
 
 

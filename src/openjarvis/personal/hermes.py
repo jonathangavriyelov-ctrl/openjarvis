@@ -10,9 +10,10 @@ Common ids that those engines accept when the weights are installed:
 * ``hermes3``, ``hermes3:8b``, ``hermes3:70b`` (Ollama library, Hermes 3)
 * ``nous-hermes2`` and other tags whose name contains ``hermes``
 
-The configured Hermes id wins when the engine actually lists it. Otherwise the
-resolver picks another listed Hermes model, then the configured fallback model,
-then the offline structured producer.
+The configured Hermes id wins when the engine actually lists it. A configured
+Hermes 4 id is rewritten to Hermes 3, because Hermes 4 is not used for
+tool-calling loops. Otherwise the resolver picks another listed Hermes model,
+then the configured fallback model, then the offline structured producer.
 """
 
 from __future__ import annotations
@@ -44,6 +45,16 @@ class ModelChoice:
 
 def _norm(value: str) -> str:
     return (value or "").strip().lower()
+
+
+def _is_hermes4(name: str) -> bool:
+    compact = _norm(name).replace("_", "").replace("-", "")
+    return "hermes4" in compact
+
+
+def _is_hermes3(name: str) -> bool:
+    compact = _norm(name).replace("_", "").replace("-", "")
+    return "hermes3" in compact
 
 
 def _matches(name: str, wanted: str) -> bool:
@@ -88,28 +99,46 @@ def resolve_executive_model(
 
     names = [name for name in (available or []) if name]
     wanted = (configured_hermes or "").strip()
+    refused_hermes4 = _is_hermes4(wanted)
+    if refused_hermes4:
+        wanted = "hermes3"
 
     if wanted:
         for name in names:
-            if _matches(name, wanted) and "hermes" in _norm(name):
-                return ModelChoice(
-                    name,
-                    "hermes",
-                    f"Using the configured Hermes model {name}.",
-                )
+            if (
+                _matches(name, wanted)
+                and "hermes" in _norm(name)
+                and not _is_hermes4(name)
+            ):
+                detail = f"Using the configured Hermes model {name}."
+                if refused_hermes4:
+                    detail = (
+                        f"Using Hermes 3 ({name}). "
+                        "Hermes 4 is not used for tool-calling loops."
+                    )
+                return ModelChoice(name, "hermes", detail)
         for name in names:
-            if _matches(name, wanted):
+            if _matches(name, wanted) and not _is_hermes4(name):
                 return ModelChoice(
                     name,
                     "hermes",
                     f"Using the configured Hermes model {name}.",
                 )
 
-    hermes_named = [name for name in names if "hermes" in _norm(name)]
-    if hermes_named:
-        chosen = hermes_named[0]
+    hermes_named = [
+        name for name in names if "hermes" in _norm(name) and not _is_hermes4(name)
+    ]
+    hermes3 = [name for name in hermes_named if _is_hermes3(name)]
+    pool = hermes3 or hermes_named
+    if pool:
+        chosen = pool[0]
         detail = f"Using Hermes model {chosen} reported by the engine."
-        if wanted and not any(_matches(name, wanted) for name in names):
+        if _is_hermes3(chosen):
+            detail = (
+                f"Using Hermes 3 ({chosen}). "
+                "Hermes 4 is not used for tool-calling loops."
+            )
+        elif wanted and not any(_matches(name, wanted) for name in names):
             detail = (
                 f"{wanted} is not installed. Using Hermes model {chosen} "
                 "already available on the engine."

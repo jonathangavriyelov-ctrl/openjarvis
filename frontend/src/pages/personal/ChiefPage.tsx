@@ -20,6 +20,7 @@ import {
   type Proposal,
 } from '../../lib/personal-api';
 import { OsError, OsShell, useDeskWorld, useEli5 } from './Shell';
+import { RoiPanel } from './RoiPanel';
 import './personal.css';
 
 const COLUMNS = [
@@ -160,6 +161,8 @@ export function ChiefPage() {
           </button>
         </div>
       </form>
+
+      <RoiPanel />
 
       <div className="os-grid" style={{ marginTop: 16 }}>
         <section className="os-card">

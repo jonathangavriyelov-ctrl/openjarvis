@@ -303,3 +303,26 @@ followed by the note or the link. The reply says where the lesson was filed.
 
 The eco world shows lesson counts on each planet, and each agent shows how
 many lessons it has learned.
+
+## Cost and return
+
+The Chief of Staff page shows this month's cost against value. Cost is model
+tokens, Higgsfield pictures, and recurring bills you type in (Neon, Vercel,
+or anything else). Token cost uses OmniRoute's reported dollars when the
+gateway sends them, and otherwise a price table you can change. Value is
+revenue you enter for a world, or a hook can post the same number, plus time
+saved on each finished task.
+
+Each planet says whether that world is paying for itself.
+
+A monthly cap for the whole desk, and one per world, warns at 80 percent.
+Past that, the next model call goes through OmniRoute on a cheaper model.
+If even the cheap call would pass the cap, the paid model is not called.
+
+Planning uses the strongest OmniRoute model. The Executive Assistant uses
+Hermes 3. Hermes 4 is not used for tool-calling. Notes and classification
+use a cheap, fast model.
+
+Quick Funders playbooks follow up leads and nudge the pipeline. JWJ / Gavco
+and Glatt Express draft content and customer re-engagement. Outbound messages
+stay drafts until you approve them.

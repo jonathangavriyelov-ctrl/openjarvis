@@ -239,6 +239,12 @@ export function WorldPage() {
                     : ''}
                 </small>
                 {planet.accounts.length === 0 && <span className="planet-mail">Connect email</span>}
+                {planet.roi && (
+                  <span className="planet-mail">
+                    {planet.roi.paying ? 'Paying for itself' : 'Not paying for itself'}
+                    {` · $${planet.roi.cost.toFixed(0)} cost · $${planet.roi.value.toFixed(0)} value`}
+                  </span>
+                )}
               </button>
             );
           })}

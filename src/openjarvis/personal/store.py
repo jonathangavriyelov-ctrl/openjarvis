@@ -20,11 +20,24 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _month_bounds(month: str) -> tuple[str, str]:
+    """Inclusive start and exclusive end for a ``YYYY-MM`` stamp."""
+    year_text, month_text = month.split("-", 1)
+    year = int(year_text)
+    mon = int(month_text)
+    start = f"{year:04d}-{mon:02d}-01"
+    if mon == 12:
+        end = f"{year + 1:04d}-01-01"
+    else:
+        end = f"{year:04d}-{mon + 1:02d}-01"
+    return start, end
+
+
 def _new_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
-_CATALOG_VERSION = "jonathan-1"
+_CATALOG_VERSION = "jonathan-2"
 _CRM_SUMMARY = (
     "Merchant cash advance pipeline. "
     "github.com/jonathangavriyelov-ctrl/quick-funders-crm. "
@@ -64,14 +77,20 @@ _WORLD_CATALOG: tuple[dict[str, Any], ...] = (
             "Quick Funders",
             {
                 "chief_of_staff": (
-                    "You run Quick Funders, a merchant cash advance business."
+                    "You run Quick Funders, a merchant cash advance business. "
+                    "Push lead follow-up and pipeline nudges. "
+                    "Any outbound message stays a draft until Jonathan approves it."
                 ),
                 "executive_assistant": (
-                    "Track Quick Funders deals, funder follow-ups, and deadlines."
+                    "Follow up Quick Funders leads and nudge stalled deals. "
+                    "Track funder deadlines. "
+                    "Any outbound message stays a draft until Jonathan approves it."
                 ),
                 "marketing_content": (
                     "You market Quick Funders, a merchant cash advance company. "
-                    "Write for brokers and merchants about funding."
+                    "Write for brokers and merchants about funding, "
+                    "and draft follow-ups. "
+                    "Any outbound message stays a draft until Jonathan approves it."
                 ),
                 "second_brain": (
                     "Remember Quick Funders deals, funders, and CRM notes."
@@ -90,13 +109,21 @@ _WORLD_CATALOG: tuple[dict[str, Any], ...] = (
         "briefs": _briefs(
             "JWJ / Gavco",
             {
-                "chief_of_staff": "You run JWJ / Gavco, a jewelry business.",
+                "chief_of_staff": (
+                    "You run JWJ / Gavco, a jewelry business. "
+                    "Ask for content and client re-engagement. "
+                    "Any outbound message stays a draft until Jonathan approves it."
+                ),
                 "executive_assistant": (
-                    "Keep the jewelry bench, client orders, and appointments on track."
+                    "Re-engage jewelry clients and keep orders "
+                    "and appointments moving. "
+                    "Any outbound message stays a draft until Jonathan approves it."
                 ),
                 "marketing_content": (
                     "You market JWJ / Gavco, a jewelry business. "
-                    "Write about pieces, clients, and the bench."
+                    "Draft jewelry content and customer re-engagement "
+                    "about pieces, clients, and the bench. "
+                    "Any outbound message stays a draft until Jonathan approves it."
                 ),
                 "second_brain": "Remember jewelry clients, pieces, and orders.",
             },
@@ -114,14 +141,19 @@ _WORLD_CATALOG: tuple[dict[str, Any], ...] = (
             "Glatt Express",
             {
                 "chief_of_staff": (
-                    "You run Glatt Express, a kosher meat distribution business."
+                    "You run Glatt Express, a kosher meat distribution business. "
+                    "Ask for content and customer re-engagement. "
+                    "Any outbound message stays a draft until Jonathan approves it."
                 ),
                 "executive_assistant": (
-                    "Track Glatt Express orders, deliveries, and shop follow-ups."
+                    "Re-engage Glatt Express shops and track orders and deliveries. "
+                    "Any outbound message stays a draft until Jonathan approves it."
                 ),
                 "marketing_content": (
                     "You market Glatt Express, a kosher meat and food distributor. "
-                    "Write about product, delivery, and kashrut."
+                    "Draft content and customer re-engagement "
+                    "about product, delivery, and kashrut. "
+                    "Any outbound message stays a draft until Jonathan approves it."
                 ),
                 "second_brain": (
                     "Remember Glatt Express products, shops, and deliveries."
@@ -180,6 +212,55 @@ _WORLD_CATALOG: tuple[dict[str, Any], ...] = (
         ),
     },
 )
+
+_OLD_PLAYBOOKS: dict[str, dict[str, str]] = {
+    "Quick Funders": _briefs(
+        "Quick Funders",
+        {
+            "chief_of_staff": (
+                "You run Quick Funders, a merchant cash advance business."
+            ),
+            "executive_assistant": (
+                "Track Quick Funders deals, funder follow-ups, and deadlines."
+            ),
+            "marketing_content": (
+                "You market Quick Funders, a merchant cash advance company. "
+                "Write for brokers and merchants about funding."
+            ),
+            "second_brain": "Remember Quick Funders deals, funders, and CRM notes.",
+        },
+    ),
+    "JWJ / Gavco": _briefs(
+        "JWJ / Gavco",
+        {
+            "chief_of_staff": "You run JWJ / Gavco, a jewelry business.",
+            "executive_assistant": (
+                "Keep the jewelry bench, client orders, and appointments on track."
+            ),
+            "marketing_content": (
+                "You market JWJ / Gavco, a jewelry business. "
+                "Write about pieces, clients, and the bench."
+            ),
+            "second_brain": "Remember jewelry clients, pieces, and orders.",
+        },
+    ),
+    "Glatt Express": _briefs(
+        "Glatt Express",
+        {
+            "chief_of_staff": (
+                "You run Glatt Express, a kosher meat distribution business."
+            ),
+            "executive_assistant": (
+                "Track Glatt Express orders, deliveries, and shop follow-ups."
+            ),
+            "marketing_content": (
+                "You market Glatt Express, a kosher meat and food distributor. "
+                "Write about product, delivery, and kashrut."
+            ),
+            "second_brain": "Remember Glatt Express products, shops, and deliveries.",
+        },
+    ),
+}
 
 
 _SCHEMA = """
@@ -359,6 +440,36 @@ CREATE TABLE IF NOT EXISTS playbook_proposals (
     detail TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS spend_entries (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL DEFAULT '',
+    specialist_id TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL,
+    model TEXT NOT NULL DEFAULT '',
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    amount REAL NOT NULL DEFAULT 0,
+    detail TEXT NOT NULL DEFAULT '',
+    month TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS revenue_entries (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL,
+    amount REAL NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    note TEXT NOT NULL DEFAULT '',
+    month TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS budget_alerts (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL DEFAULT '',
+    level TEXT NOT NULL,
+    message TEXT NOT NULL,
+    month TEXT NOT NULL,
+    created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS scoped_agent_state (
     world_id TEXT NOT NULL,
@@ -1106,6 +1217,7 @@ class PersonalStore:
     def ensure_worlds(self) -> None:
         """Seed Jonathan's worlds once, and fill any that an older desk missed."""
         if self.get_setting("worlds_catalog") == _CATALOG_VERSION:
+            self._upgrade_revenue_playbooks()
             return
         by_name = {world["name"]: world for world in self.list_worlds()}
         ids: dict[str, str] = {}
@@ -1132,6 +1244,7 @@ class PersonalStore:
             self._backfill_world(personal_id)
         self.set_setting("worlds_seeded", "1")
         self.set_setting("worlds_catalog", _CATALOG_VERSION)
+        self._upgrade_revenue_playbooks()
 
     def _refresh_catalog_world(
         self, current: dict[str, Any], spec: dict[str, Any]
@@ -1159,6 +1272,26 @@ class PersonalStore:
                 brief=briefs.get(row["specialist_id"], ""),
                 higgsfield=bool(higgs.get(row["specialist_id"], row["higgsfield"])),
             )
+
+    def _upgrade_revenue_playbooks(self) -> None:
+        """Replace untouched seed briefs with the revenue playbooks."""
+        if self.get_setting("revenue_playbooks") == "1":
+            return
+        by_name = {world["name"]: world for world in self.list_worlds()}
+        for spec in _WORLD_CATALOG:
+            world = by_name.get(spec["name"])
+            if world is None:
+                continue
+            previous = _OLD_PLAYBOOKS.get(spec["name"], {})
+            for row in self.team(world["id"]):
+                current = (row.get("brief") or "").strip()
+                old = (previous.get(row["specialist_id"]) or "").strip()
+                new = spec["briefs"].get(row["specialist_id"], "")
+                if current and current != old:
+                    continue
+                if new:
+                    self.update_team(world["id"], row["specialist_id"], brief=new)
+        self.set_setting("revenue_playbooks", "1")
 
     def _assign_catalog_projects(self, ids: dict[str, str]) -> None:
         personal_id = ids.get("Personal") or ""
@@ -1860,3 +1993,140 @@ class PersonalStore:
         data["sops"] = json.loads(data.pop("sops_json") or "[]")
         data["ideas"] = json.loads(data.pop("ideas_json") or "[]")
         return data
+
+    def add_spend(
+        self,
+        *,
+        world_id: str,
+        specialist_id: str,
+        kind: str,
+        amount: float,
+        month: str,
+        model: str = "",
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        detail: str = "",
+    ) -> dict[str, Any]:
+        spend_id = _new_id()
+        now = _now()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO spend_entries (id, world_id, specialist_id, kind, "
+                "model, input_tokens, output_tokens, amount, detail, month, "
+                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    spend_id,
+                    world_id or "",
+                    specialist_id or "",
+                    kind,
+                    model,
+                    int(input_tokens),
+                    int(output_tokens),
+                    float(amount),
+                    detail,
+                    month,
+                    now,
+                ),
+            )
+            self._conn.commit()
+        return {"id": spend_id, "amount": float(amount), "month": month}
+
+    def spend_rows(self, month: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM spend_entries WHERE month = ? ORDER BY created_at",
+                (month,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_revenue(
+        self,
+        *,
+        world_id: str,
+        amount: float,
+        month: str,
+        source: str = "manual",
+        note: str = "",
+    ) -> dict[str, Any]:
+        revenue_id = _new_id()
+        now = _now()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO revenue_entries (id, world_id, amount, source, "
+                "note, month, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (revenue_id, world_id, float(amount), source, note, month, now),
+            )
+            self._conn.commit()
+        return {
+            "id": revenue_id,
+            "world_id": world_id,
+            "amount": float(amount),
+            "source": source,
+            "note": note,
+            "month": month,
+            "created_at": now,
+        }
+
+    def revenue_rows(self, month: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM revenue_entries WHERE month = ? ORDER BY created_at",
+                (month,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def completed_task_count(self, month: str, world_id: str = "") -> int:
+        start, end = _month_bounds(month)
+        with self._lock:
+            if world_id:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) AS n FROM tasks JOIN missions "
+                    "ON missions.id = tasks.mission_id "
+                    "WHERE tasks.status = 'done' AND missions.world_id = ? "
+                    "AND tasks.updated_at >= ? AND tasks.updated_at < ?",
+                    (world_id, start, end),
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) AS n FROM tasks "
+                    "WHERE status = 'done' AND updated_at >= ? "
+                    "AND updated_at < ?",
+                    (start, end),
+                ).fetchone()
+        return int(row["n"]) if row else 0
+
+    def add_budget_alert(
+        self, *, world_id: str, level: str, message: str, month: str
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            existing = self._conn.execute(
+                "SELECT id FROM budget_alerts WHERE world_id = ? AND level = ? "
+                "AND month = ? LIMIT 1",
+                (world_id or "", level, month),
+            ).fetchone()
+            if existing:
+                return None
+            alert_id = _new_id()
+            now = _now()
+            self._conn.execute(
+                "INSERT INTO budget_alerts (id, world_id, level, message, "
+                "month, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (alert_id, world_id or "", level, message, month, now),
+            )
+            self._conn.commit()
+        return {
+            "id": alert_id,
+            "world_id": world_id or "",
+            "level": level,
+            "message": message,
+            "month": month,
+            "created_at": now,
+        }
+
+    def budget_alerts(self, month: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM budget_alerts WHERE month = ? ORDER BY created_at",
+                (month,),
+            ).fetchall()
+        return [dict(row) for row in rows]

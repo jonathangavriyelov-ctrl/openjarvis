@@ -25,6 +25,7 @@ from openjarvis.personal.memory_bridge import MemoryBridge
 from openjarvis.personal.omniroute import OmniRouteClient, resolve_omniroute
 from openjarvis.personal.phone import PhoneGate, describe_phone
 from openjarvis.personal.planner import plan_from_model_text, plan_request
+from openjarvis.personal.roi import RoiLedger, estimate_tokens
 from openjarvis.personal.specialists import (
     ProduceContext,
     get_specialist,
@@ -182,6 +183,8 @@ class PersonalOffice:
         self.phone = phone if phone is not None else PhoneGate()
         self.source_reader = None
         self.feed = KnowledgeFeed(self)
+        self.roi = RoiLedger(self)
+        self.roi.ensure_defaults()
         self._telegram_token = ""
         self._slack_token = ""
         self._slack_app_token = ""
@@ -292,6 +295,9 @@ class PersonalOffice:
         world_id: str = "",
     ) -> dict[str, Any]:
         """One model choice per agent, OmniRoute first when it is reachable."""
+        settings = self.roi.settings()
+        self.omniroute.strong_model = settings["strong_model"]
+        self.omniroute.cheap_model = settings["cheap_model"]
         status = self.omniroute.public_status()
         team = {
             row["specialist_id"]: row
@@ -332,6 +338,9 @@ class PersonalOffice:
         world_note = self._team_brief(specialist_id)
         if world_note:
             extra = f"{extra}\n\nThis world:\n{world_note}".strip()
+        world_id = str(self._turn.get("world_id") or "")
+        choice = self._fit_budget(choice, specialist_id, world_id, user_text)
+        self._calls.used = choice
         messages = [
             Message(role=Role.SYSTEM, content=render_system_prompt(spec, extra=extra)),
             Message(role=Role.USER, content=user_text),
@@ -346,11 +355,21 @@ class PersonalOffice:
                 text, actual = answered
                 from openjarvis.personal.hermes import ModelChoice
 
-                self._calls.used = ModelChoice(
+                used = ModelChoice(
                     actual or choice.model_id,
                     "omniroute",
                     choice.detail,
                     route="omniroute",
+                )
+                self._calls.used = used
+                usage = self.omniroute.take_usage()
+                self._record_llm(
+                    world_id,
+                    specialist_id,
+                    used.model_id,
+                    user_text,
+                    text,
+                    usage,
                 )
                 return text
             choice = self._engine_choice(specialist_id)
@@ -371,7 +390,58 @@ class PersonalOffice:
             text = result.get("content") or ""
         else:
             text = str(result or "")
-        return text.strip() or None
+        cleaned = text.strip()
+        if cleaned:
+            self._record_llm(
+                world_id,
+                specialist_id,
+                choice.model_id,
+                user_text,
+                cleaned,
+                {},
+            )
+        return cleaned or None
+
+    def _fit_budget(self, choice: Any, specialist_id: str, world_id: str, prompt: str):
+        from openjarvis.personal.hermes import ModelChoice
+
+        action, _estimate = self.roi.decide(world_id, specialist_id, prompt)
+        if action == "ok":
+            return choice
+        if action == "downgrade" and self.omniroute.public_status().get("reachable"):
+            cheap = self.roi.settings()["cheap_model"]
+            return self.omniroute.choice_for(
+                "second_brain",
+                prefers_hermes=False,
+                model=cheap,
+            )
+        return ModelChoice(
+            "",
+            "offline",
+            "The monthly budget is too close to call a paid model.",
+            route="offline",
+        )
+
+    def _record_llm(
+        self,
+        world_id: str,
+        specialist_id: str,
+        model: str,
+        prompt: str,
+        text: str,
+        usage: dict[str, Any],
+    ) -> None:
+        if not world_id or world_id == OVERALL:
+            world_id = ""
+        reported = usage.get("reported_cost")
+        self.roi.record_llm(
+            world_id=world_id,
+            specialist_id=specialist_id,
+            model=model,
+            input_tokens=int(usage.get("input_tokens") or estimate_tokens(prompt)),
+            output_tokens=int(usage.get("output_tokens") or estimate_tokens(text)),
+            reported=reported if reported is not None else None,
+        )
 
     # -- goals ---------------------------------------------------------------
 
@@ -611,6 +681,7 @@ class PersonalOffice:
                 self._public_account(account)
                 for account in self.store.list_google_accounts(world_id)
             ],
+            "roi": self.roi.line(world_id),
         }
 
     def create_world(
@@ -696,6 +767,25 @@ class PersonalOffice:
             if row["specialist_id"] == specialist_id:
                 return str(row.get("brief") or "")
         return ""
+
+    def _higgsfield_within_budget(self, world_id: str, video: bool) -> bool:
+        settings = self.roi.settings()
+        prices = settings["prices"]
+        amount = float(
+            prices.get("higgsfield_video" if video else "higgsfield_image") or 0
+        )
+        if video:
+            amount += float(prices.get("higgsfield_image") or 0)
+        spent_world, spent_overall = self.roi._spent(world_id)
+        world_cap = float(settings["budgets"]["worlds"].get(world_id) or 0)
+        overall_cap = float(settings["budgets"]["overall"] or 0)
+        if world_cap and spent_world + amount > world_cap:
+            self.roi._alert(world_id, "block")
+            return False
+        if overall_cap and spent_overall + amount > overall_cap:
+            self.roi._alert("", "block")
+            return False
+        return True
 
     def _higgsfield_on(self, world_id: str, specialist_id: str) -> bool:
         for row in self.store.team(world_id):
@@ -1125,10 +1215,28 @@ class PersonalOffice:
             body = f"{body.rstrip()}\n\n{briefing}"
         assets: list[dict[str, Any]] = []
         if produced.visual_prompt and self._higgsfield_on(world_id, spec.id):
-            assets = self.higgsfield.illustrate(
-                produced.visual_prompt,
-                video=produced.want_video,
-            )
+            if self._higgsfield_within_budget(world_id, produced.want_video):
+                assets = self.higgsfield.illustrate(
+                    produced.visual_prompt,
+                    video=produced.want_video,
+                )
+                for asset in assets:
+                    if asset.get("status") == "completed":
+                        self.roi.record_higgsfield(
+                            world_id=world_id,
+                            specialist_id=spec.id,
+                            kind=str(asset.get("kind") or "image"),
+                        )
+            else:
+                assets = [
+                    {
+                        "kind": "image",
+                        "status": "skipped",
+                        "url": "",
+                        "detail": "Skipped. This world is at its monthly budget.",
+                        "prompt": produced.visual_prompt,
+                    }
+                ]
             body = f"{body.rstrip()}\n{_visual_section(assets)}"
         deliverable = self.store.add_deliverable(
             mission_id=task["mission_id"],

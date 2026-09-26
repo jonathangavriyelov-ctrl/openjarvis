@@ -717,3 +717,51 @@ def personal_reject_playbook(proposal_id: str, request: Request) -> dict[str, An
     except KeyError as exc:
         _knowledge_error(exc)
         raise
+
+
+class RevenueRequest(BaseModel):
+    world_id: str = Field(..., min_length=1)
+    amount: float
+    note: str = ""
+    source: str = "manual"
+
+
+class RoiSettingsRequest(BaseModel):
+    hourly_rate: Optional[float] = None
+    minutes_per_task: Optional[float] = None
+    strong_model: Optional[str] = None
+    cheap_model: Optional[str] = None
+    budgets: Optional[dict[str, Any]] = None
+    prices: Optional[dict[str, Any]] = None
+    recurring: Optional[list[dict[str, Any]]] = None
+
+
+@personal_router.get("/roi")
+def personal_roi(request: Request) -> dict[str, Any]:
+    return _office_from_app(request).roi.report()
+
+
+@personal_router.post("/roi/revenue")
+def personal_roi_revenue(body: RevenueRequest, request: Request) -> dict[str, Any]:
+    office = _office_from_app(request)
+    try:
+        office.roi.add_revenue(
+            world_id=body.world_id,
+            amount=body.amount,
+            note=body.note,
+            source=body.source,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return office.roi.report()
+
+
+@personal_router.put("/roi/settings")
+def personal_roi_settings(body: RoiSettingsRequest, request: Request) -> dict[str, Any]:
+    office = _office_from_app(request)
+    payload = body.model_dump(exclude_none=True)
+    try:
+        office.roi.save_settings(payload)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return office.roi.report()

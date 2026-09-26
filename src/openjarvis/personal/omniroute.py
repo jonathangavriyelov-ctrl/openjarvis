@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
@@ -72,6 +73,9 @@ class OmniRouteClient:
         self._reachable = False
         self._models: list[str] = []
         self._detail = ""
+        self._usage = threading.local()
+        self.strong_model = ""
+        self.cheap_model = ""
 
     @property
     def configured(self) -> bool:
@@ -109,6 +113,10 @@ class OmniRouteClient:
         override = (model or self.agent_models.get(specialist_id, "")).strip()
         if prefers_hermes or specialist_id == "executive_assistant":
             return self._hermes_choice(override or hermes_model)
+        if specialist_id == "chief_of_staff" and not override:
+            return self._tier_choice("strong", self.strong_model)
+        if specialist_id == "second_brain" and not override:
+            return self._tier_choice("cheap", self.cheap_model)
         model = override or self.default_model
         if model != DEFAULT_MODEL and self._models and not _listed(model, self._models):
             return ModelChoice(
@@ -143,7 +151,7 @@ class OmniRouteClient:
             "max_tokens": 900,
         }
         try:
-            status, body = self._request(
+            status, body, headers = self._request(
                 "POST",
                 f"{self.api_root}/chat/completions",
                 payload,
@@ -161,26 +169,103 @@ class OmniRouteClient:
         if not text:
             return None
         actual = str(body.get("model") or model or self.default_model)
+        self._usage.last = _usage_from(body, headers, payload, text)
         return text, actual
 
-    def _hermes_choice(self, wanted: str) -> ModelChoice:
-        name = (wanted or "").strip()
-        listed = _find(name, self._models) if name else ""
-        if listed:
+    def take_usage(self) -> dict[str, Any]:
+        usage = getattr(self._usage, "last", None) or {}
+        self._usage.last = {}
+        return dict(usage)
+
+    def usage_summary(self) -> dict[str, Any] | None:
+        """Monthly cost from OmniRoute's usage API, when that route exists."""
+        if not self.configured:
+            return None
+        if self.api_root.endswith("/v1"):
+            origin = self.api_root[: -len("/v1")]
+        else:
+            origin = self.base_url
+        try:
+            status, body, _headers = self._request(
+                "GET",
+                f"{origin}/api/usage/analytics?range=30d",
+                None,
+            )
+        except Exception:
+            logger.debug("OmniRoute usage lookup failed", exc_info=True)
+            return None
+        if status >= 400 or not isinstance(body, dict):
+            return None
+        cost = _analytics_cost(body)
+        if cost is None:
+            return None
+        return {"cost": round(float(cost), 4), "range": "30d"}
+
+    def _tier_choice(self, tier: str, configured: str) -> ModelChoice:
+        wanted = (configured or "").strip()
+        if wanted:
+            listed = _find(wanted, self._models) or wanted
             return ModelChoice(
                 listed,
                 "omniroute",
-                f"Executive Assistant calls Hermes model {listed} through OmniRoute.",
+                f"Through OmniRoute as {listed}.",
                 route="omniroute",
             )
-        hermes_named = [item for item in self._models if "hermes" in item.lower()]
-        if hermes_named:
+        if tier == "strong":
+            picked = _pick(
+                self._models, _STRONG_HINTS, avoid=("mini", "flash", "haiku")
+            )
+            detail = "Chief of Staff planning uses the strongest OmniRoute model."
+        else:
+            picked = _pick(self._models, _CHEAP_HINTS)
+            detail = "Routine notes use a cheap, fast OmniRoute model."
+        if not picked:
+            picked = self.default_model or DEFAULT_MODEL
+            detail = f"{detail} Using {picked}."
+        else:
+            detail = f"{detail} Using {picked}."
+        return ModelChoice(picked, "omniroute", detail, route="omniroute")
+
+    def _hermes_choice(self, wanted: str) -> ModelChoice:
+        name = (wanted or "").strip()
+        if _is_hermes4(name):
+            name = "hermes3"
+        listed = _find(name, self._models) if name and not _is_hermes4(name) else ""
+        if listed and _is_hermes3(listed):
             return ModelChoice(
-                hermes_named[0],
+                listed,
                 "omniroute",
                 (
-                    f"OmniRoute lists Hermes model {hermes_named[0]}. "
-                    "The Executive Assistant is using that."
+                    f"Executive Assistant calls Hermes 3 ({listed}) through OmniRoute. "
+                    "Hermes 4 is not used for tool-calling loops."
+                ),
+                route="omniroute",
+            )
+        hermes3 = [item for item in self._models if _is_hermes3(item)]
+        if hermes3:
+            return ModelChoice(
+                hermes3[0],
+                "omniroute",
+                (
+                    f"Executive Assistant calls Hermes 3 ({hermes3[0]}) "
+                    "through OmniRoute. "
+                    "Hermes 4 is not used for tool-calling loops."
+                ),
+                route="omniroute",
+            )
+        older = [
+            item
+            for item in self._models
+            if "hermes" in item.lower() and not _is_hermes4(item)
+        ]
+        if older:
+            return ModelChoice(
+                older[0],
+                "omniroute",
+                (
+                    f"Executive Assistant calls Hermes model {older[0]} "
+                    "through OmniRoute. "
+                    "Hermes 4 is not used for tool-calling loops."
                 ),
                 route="omniroute",
             )
@@ -190,8 +275,9 @@ class OmniRouteClient:
             fallback,
             "omniroute",
             (
-                f"OmniRoute is up, and {missing} is not in its catalog. "
-                f"Using {fallback} so OmniRoute can pick a provider and fall back."
+                f"Hermes 3 ({missing}) is not in the OmniRoute catalog. "
+                "Hermes 4 is not used for tool-calling loops. "
+                f"Using {fallback}."
             ),
             route="omniroute",
         )
@@ -209,7 +295,9 @@ class OmniRouteClient:
     def _probe(self) -> None:
         self._checked_at = time.monotonic()
         try:
-            status, body = self._request("GET", f"{self.api_root}/models", None)
+            status, body, _headers = self._request(
+                "GET", f"{self.api_root}/models", None
+            )
         except Exception:
             logger.debug("OmniRoute probe failed", exc_info=True)
             self._reachable = False
@@ -237,7 +325,10 @@ class OmniRouteClient:
     ) -> tuple[int, dict[str, Any]]:
         header = f"Bearer {self.api_key}" if self.api_key else ""
         if self._http is not None:
-            return self._http(method, url, payload, header)
+            result = self._http(method, url, payload, header)
+            if len(result) == 2:
+                return result[0], result[1], {}
+            return result[0], result[1], result[2]
         import httpx
 
         headers = {"Content-Type": "application/json"}
@@ -251,7 +342,10 @@ class OmniRouteClient:
             body = {}
         if not isinstance(body, dict):
             body = {}
-        return response.status_code, body
+        response_headers = {
+            key.lower(): value for key, value in response.headers.items()
+        }
+        return response.status_code, body, response_headers
 
 
 def _public_url(url: str) -> str:
@@ -281,6 +375,73 @@ def _model_ids(body: dict[str, Any]) -> list[str]:
 
 def _listed(wanted: str, names: list[str]) -> bool:
     return bool(_find(wanted, names))
+
+
+_STRONG_HINTS = ("gpt-4o", "gpt-4.1", "claude-opus", "claude-sonnet", "o3", "o1")
+_CHEAP_HINTS = ("gpt-4o-mini", "gpt-4.1-mini", "haiku", "flash", "mini")
+
+
+def _is_hermes4(name: str) -> bool:
+    compact = (name or "").lower().replace("_", "").replace("-", "")
+    return "hermes4" in compact
+
+
+def _is_hermes3(name: str) -> bool:
+    compact = (name or "").lower().replace("_", "").replace("-", "")
+    return "hermes3" in compact
+
+
+def _pick(
+    names: list[str], hints: tuple[str, ...], *, avoid: tuple[str, ...] = ()
+) -> str:
+    for hint in hints:
+        for name in names:
+            lowered = name.lower()
+            if hint in lowered and not any(word in lowered for word in avoid):
+                return name
+    return ""
+
+
+def _usage_from(
+    body: dict[str, Any],
+    headers: dict[str, Any],
+    payload: dict[str, Any],
+    text: str,
+) -> dict[str, Any]:
+    usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+    raw_in = usage.get("prompt_tokens", headers.get("x-omniroute-tokens-in"))
+    raw_out = usage.get("completion_tokens", headers.get("x-omniroute-tokens-out"))
+    try:
+        reported = float(headers["x-omniroute-response-cost"])
+    except (KeyError, TypeError, ValueError):
+        reported = None
+    prompt = " ".join(
+        str(item.get("content") or "")
+        for item in (payload.get("messages") or [])
+        if isinstance(item, dict)
+    )
+    input_tokens = int(raw_in) if raw_in not in (None, "") else max(1, len(prompt) // 4)
+    if raw_out not in (None, ""):
+        output_tokens = int(raw_out)
+    else:
+        output_tokens = max(1, len(text) // 4)
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "reported_cost": reported,
+    }
+
+
+def _analytics_cost(body: dict[str, Any]) -> float | None:
+    summary = body.get("summary") if isinstance(body.get("summary"), dict) else {}
+    for source in (summary, body):
+        for key in ("totalCost", "cost", "costUsd", "total_cost"):
+            if source.get(key) is not None:
+                try:
+                    return float(source[key])
+                except (TypeError, ValueError):
+                    continue
+    return None
 
 
 def _find(wanted: str, names: list[str]) -> str:
