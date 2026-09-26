@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router';
+import { requestLock } from '../../lib/os-gate';
 import { fetchSettings, fetchWorlds, updateSettings, type DeskWorld } from '../../lib/personal-api';
 
 const LINKS = [
@@ -157,6 +158,9 @@ export function OsShell({
             aria-pressed={eli5}
           >
             {eli5 ? 'Simple words: on' : 'Explain like I’m 5'}
+          </button>
+          <button type="button" className="eli5-toggle" onClick={() => requestLock()}>
+            Lock
           </button>
         </div>
         <header className="os-heading">

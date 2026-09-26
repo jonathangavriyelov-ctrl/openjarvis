@@ -474,18 +474,26 @@ def test_missing_hermes_falls_back_without_failing_the_mission(tmp_path):
         office.close()
 
 
-def test_personal_api_round_trip(tmp_path):
+def test_personal_api_round_trip(tmp_path, monkeypatch):
     pytest.importorskip("fastapi")
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from openjarvis.personal.routes import personal_router
+    from openjarvis.personal.routes import mount_personal
 
+    monkeypatch.setenv("OPENJARVIS_HOME", str(tmp_path / "oj-home"))
+    monkeypatch.delenv("OPENJARVIS_PERSONAL_OS", raising=False)
+    monkeypatch.delenv("OPENJARVIS_API_KEY", raising=False)
     office = PersonalOffice(tmp_path / "personal.db")
     app = FastAPI()
     app.state.personal_office = office
-    app.include_router(personal_router)
+    mount_personal(app)
     client = TestClient(app)
+    setup = client.post(
+        "/v1/personal/auth/setup",
+        json={"password": "correct-horse"},
+    )
+    assert setup.status_code == 200, setup.text
     try:
         created = client.post(
             "/v1/personal/goals",

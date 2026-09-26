@@ -23,6 +23,8 @@ import { Toaster } from './components/ui/sonner';
 import { useAppStore } from './lib/store';
 import { fetchModels, fetchServerInfo, fetchSavings, submitSavings, isTauri } from './lib/api';
 import { OptInModal } from './components/OptInModal';
+import { OsLock } from './components/OsLock';
+import { fetchGateStatus, LOCK_EVENT, lockDesk } from './lib/os-gate';
 import { UpdateChecker } from './components/Desktop/UpdateChecker';
 import { track, hashId } from './lib/analytics';
 
@@ -55,8 +57,30 @@ export default function App() {
   const setOptInModalOpen = useAppStore((s) => s.setOptInModalOpen);
   const markOptInModalSeen = useAppStore((s) => s.markOptInModalSeen);
   const savings = useAppStore((s) => s.savings);
+  const [gate, setGate] = useState<'loading' | 'setup' | 'locked' | 'offline' | 'open'>('loading');
   const location = useLocation();
   const onPersonalDesk = location.pathname.startsWith('/os');
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchGateStatus()
+      .then((status) => {
+        if (cancelled) return;
+        if (status.unlocked) setGate('open');
+        else setGate(status.password_set ? 'locked' : 'setup');
+      })
+      .catch(() => {
+        if (!cancelled) setGate('offline');
+      });
+    const onLock = () => {
+      void lockDesk().finally(() => setGate('locked'));
+    };
+    window.addEventListener(LOCK_EVENT, onLock);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(LOCK_EVENT, onLock);
+    };
+  }, []);
 
   // Apply theme class to <html>
   useEffect(() => {
@@ -77,21 +101,24 @@ export default function App() {
 
   // Fetch models on mount
   useEffect(() => {
+    if (gate !== 'open') return;
     fetchModels()
       .then((m) => {
         setModels(m);
       })
       .catch(() => setModels([]))
       .finally(() => setModelsLoading(false));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [gate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch server info
   useEffect(() => {
+    if (gate !== 'open') return;
     fetchServerInfo().then(setServerInfo).catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [gate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll savings and optionally share to Supabase
   useEffect(() => {
+    if (gate !== 'open') return;
     const refresh = () =>
       fetchSavings()
         .then((data) => {
@@ -126,7 +153,7 @@ export default function App() {
     refresh();
     const interval = setInterval(refresh, 30000);
     return () => clearInterval(interval);
-  }, [optInEnabled, optInDisplayName, optInAnonId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [gate, optInEnabled, optInDisplayName, optInAnonId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The personal desk never auto-opens the leaderboard prompt. Elsewhere,
   // the first visit can still offer it. A settings toggle is the only way
@@ -194,6 +221,20 @@ export default function App() {
 
   if (!setupDone) {
     return <SetupScreen onReady={handleSetupReady} />;
+  }
+
+  if (gate !== 'open') {
+    if (gate === 'loading') {
+      return (
+        <div className="min-h-full w-full" style={{ background: 'var(--color-bg)' }} />
+      );
+    }
+    return (
+      <OsLock
+        mode={gate}
+        onUnlocked={() => setGate('open')}
+      />
+    );
   }
 
   return (

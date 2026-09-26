@@ -17,6 +17,7 @@ fi
 
 export OPENJARVIS_HERMES_MODEL="${OPENJARVIS_HERMES_MODEL:-hermes3:8b}"
 export OPENJARVIS_FALLBACK_MODEL="${OPENJARVIS_FALLBACK_MODEL:-qwen3.5:4b}"
+export OPENJARVIS_PERSONAL_OS=1
 
 ollama_up() {
   curl -sf --max-time 2 "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1

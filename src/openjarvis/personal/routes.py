@@ -6,9 +6,10 @@ import logging
 import os
 from typing import Any, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
+from openjarvis.personal.gate import request_unlocked
 from openjarvis.personal.google_desk import resolve_google_desk_path
 from openjarvis.personal.office import PersonalOffice
 from openjarvis.personal.phone import resolve_phone_gate, start_phone
@@ -16,7 +17,25 @@ from openjarvis.personal.specialists import get_specialist
 
 logger = logging.getLogger(__name__)
 
-personal_router = APIRouter(prefix="/v1/personal", tags=["personal"])
+def require_session(request: Request) -> None:
+    """Block desk data until the browser holds a session or an API key."""
+    if not request_unlocked(request):
+        raise HTTPException(status_code=401, detail="Sign in required")
+
+
+personal_router = APIRouter(
+    prefix="/v1/personal",
+    tags=["personal"],
+    dependencies=[Depends(require_session)],
+)
+
+
+def mount_personal(app) -> None:  # noqa: ANN001
+    """Attach the sign-in routes and the locked desk routes."""
+    from openjarvis.personal.auth_routes import auth_router
+
+    app.include_router(auth_router)
+    app.include_router(personal_router)
 
 
 class MissionRequest(BaseModel):

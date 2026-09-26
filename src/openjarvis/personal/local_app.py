@@ -11,7 +11,8 @@ import argparse
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from openjarvis.personal.routes import personal_router
+from openjarvis.personal.gate import OsGateMiddleware
+from openjarvis.personal.routes import mount_personal
 
 _ORIGINS = (
     "http://127.0.0.1:5173",
@@ -24,16 +25,19 @@ _ORIGINS = (
 def create_app(*, probe_ollama: bool = True) -> FastAPI:
     """API for the dashboard. Cloud keys are not read."""
     app = FastAPI(title="Personal AI OS")
+    # The gate is added first so CORS stays outermost and can label 401s.
+    app.add_middleware(OsGateMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(_ORIGINS),
+        allow_origin_regex=r"http://(127\.0\.0\.1|localhost):\d+",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
     app.state.engine = _ollama_engine() if probe_ollama else None
     app.state.model = ""
-    app.include_router(personal_router)
+    mount_personal(app)
 
     @app.get("/health")
     def health() -> dict[str, str]:

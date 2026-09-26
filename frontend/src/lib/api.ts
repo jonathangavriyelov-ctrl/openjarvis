@@ -117,7 +117,11 @@ export const apiFetch = (
   const headers = authHeaders(
     (init.headers as Record<string, string> | undefined) ?? {},
   );
-  return fetch(`${getBase()}${path}`, { ...init, headers });
+  return fetch(`${getBase()}${path}`, {
+    ...init,
+    headers,
+    credentials: 'include',
+  });
 };
 
 async function tauriInvoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {

@@ -62,6 +62,12 @@ make os
 
 Open the URL it prints, usually [http://127.0.0.1:5173/os/world](http://127.0.0.1:5173/os/world). `scripts/os-up.sh` is the same command. The script starts the API and the dashboard in the background, prints that URL, and returns. The desk keeps running. Logs and process ids are in `~/.openjarvis` (`os-api.log`, `os-ui.log`, `os-api.pid`, `os-ui.pid`).
 
+The first launch asks you to create a password before any world, page, or saved data is shown. The desk stores a scrypt hash in `~/.openjarvis/os_password.json` and never the password itself. A successful sign-in sets an httpOnly cookie that lasts 7 days. **Lock** ends that session. Five wrong passwords lock the sign-in for 15 minutes. `GET /health` stays open. `/v1/personal/*` and the other data routes reject requests that have neither the session cookie nor `OPENJARVIS_API_KEY`. The phone bot and in-process agents do not use this cookie.
+
+```bash
+jarvis os reset-password
+```
+
 The dashboard installs on current Node.js 22 LTS: Node 22.12 or newer (including 22.20) and npm 10.9 or newer. npm 11 works too. Nothing in this desk requires Node 22.22 or npm 11.19. A few dependencies declare a newer Node floor; install does not treat that declaration as a hard failure.
 
 On an Apple Silicon Mac with Ollama, the Executive Assistant uses `hermes3:8b`. A config name of `hermes3` matches that tagged model. If Hermes is not installed, the assistant uses another local model (`qwen3.5:4b` when you have it). The Chief of Staff uses OmniRoute when `OMNIROUTE_BASE_URL` is set, and Ollama otherwise. The desk still opens when Ollama is off: the agents answer from their offline notes.

@@ -20,9 +20,11 @@ import {
   Orbit,
   Brain,
   Flower2,
+  Lock,
   type LucideIcon,
 } from 'lucide-react';
 import { ConversationList } from './ConversationList';
+import { requestLock } from '../../lib/os-gate';
 import { useAppStore } from '../../lib/store';
 
 export function Sidebar() {
@@ -236,6 +238,21 @@ export function Sidebar() {
                 </button>
               );
             })}
+            <button
+              type="button"
+              onClick={() => requestLock()}
+              className="relative flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors w-full text-left cursor-pointer"
+              style={{ color: 'var(--color-text-secondary)' }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'var(--color-bg-secondary)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent';
+              }}
+            >
+              <Lock size={16} />
+              Lock
+            </button>
           </nav>
         </div>
       </aside>

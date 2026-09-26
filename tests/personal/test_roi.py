@@ -283,18 +283,26 @@ def test_eighty_percent_downgrades_and_a_full_cap_blocks(tmp_path):
         office.close()
 
 
-def test_roi_api_revenue_hook_and_settings(tmp_path):
+def test_roi_api_revenue_hook_and_settings(tmp_path, monkeypatch):
     pytest.importorskip("fastapi")
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from openjarvis.personal.routes import personal_router
+    from openjarvis.personal.routes import mount_personal
 
+    monkeypatch.setenv("OPENJARVIS_HOME", str(tmp_path / "oj-home"))
+    monkeypatch.delenv("OPENJARVIS_PERSONAL_OS", raising=False)
+    monkeypatch.delenv("OPENJARVIS_API_KEY", raising=False)
     office = PersonalOffice(tmp_path / "os.db")
     app = FastAPI()
     app.state.personal_office = office
-    app.include_router(personal_router)
+    mount_personal(app)
     client = TestClient(app)
+    setup = client.post(
+        "/v1/personal/auth/setup",
+        json={"password": "correct-horse"},
+    )
+    assert setup.status_code == 200, setup.text
     try:
         funders = _world(office, "Quick Funders")
         loaded = client.get("/v1/personal/roi")

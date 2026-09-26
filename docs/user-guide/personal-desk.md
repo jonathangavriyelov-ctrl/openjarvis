@@ -13,6 +13,21 @@ That starts the API and the dashboard in the background, prints the address
 `scripts/os-up.sh`. The desk keeps running after the command finishes. Logs
 and process ids are in `~/.openjarvis`. No API keys are required.
 
+The first time you open the dashboard it shows **Create your password**
+and does not render worlds, pages, or saved data. The password is stored
+only as a scrypt hash in `~/.openjarvis/os_password.json`. Sign-in sets an
+httpOnly cookie for 7 days. **Lock** in the desk navigation closes that
+session. Five failed attempts pause sign-in for 15 minutes. `GET /health`
+stays open. `/v1/personal/*` and the other data endpoints reject a request
+that has neither the session cookie nor a configured `OPENJARVIS_API_KEY`.
+The phone bot talks to the chief in-process and does not use this cookie.
+
+To replace a forgotten password and close every session:
+
+```bash
+jarvis os reset-password
+```
+
 Install the dashboard with Node.js 22 LTS: Node 22.12 or newer, including
 22.20, and npm 10.9 or newer. npm 11 is fine. The desk does not need Node
 22.22 or npm 11.19. Some packages declare a newer Node floor; that
