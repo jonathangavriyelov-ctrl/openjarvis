@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import sys
 
 import pytest
 
@@ -11,6 +12,7 @@ from openjarvis.personal.voice_call import (
     plan_session,
     run_local_turn,
     tone_wav_b64,
+    transcribe_locally,
     voice_cost,
 )
 
@@ -180,6 +182,12 @@ def test_practice_without_the_stub_asks_the_brain():
     )
     assert result["transcript"] == "Hello Jarvis."
     assert result["content"] == "local heard you"
+
+
+def test_local_hearing_is_quiet_when_no_transcriber_is_installed(monkeypatch):
+    monkeypatch.setitem(sys.modules, "mlx_whisper", None)
+    monkeypatch.setitem(sys.modules, "faster_whisper", None)
+    assert transcribe_locally(b"RIFFnot-a-real-wav") == ""
 
 
 def test_voice_cost_bills_realtime_minutes_only():

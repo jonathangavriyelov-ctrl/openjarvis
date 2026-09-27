@@ -327,29 +327,63 @@ def tone_wav_b64(seconds: float = 1.2, frequency: float = 440.0) -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+def _temp_audio(audio: bytes) -> str:
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+        handle.write(audio)
+        return handle.name
+
+
+def _drop(path: str) -> None:
+    if path and os.path.exists(path):
+        os.unlink(path)
+
+
 def transcribe_locally(audio: bytes) -> str:
-    """Use faster-whisper when it is installed. Otherwise return nothing."""
+    """Hear a wav with mlx-whisper, then faster-whisper. Both are optional."""
     if not audio:
         return ""
+    heard = _transcribe_mlx(audio)
+    if heard:
+        return heard
+    return _transcribe_faster(audio)
+
+
+def _transcribe_mlx(audio: bytes) -> str:
+    try:
+        import mlx_whisper
+    except ImportError:
+        return ""
+    path = _temp_audio(audio)
+    try:
+        result = mlx_whisper.transcribe(
+            path,
+            path_or_hf_repo="mlx-community/whisper-base-mlx",
+        )
+        if isinstance(result, dict):
+            return str(result.get("text") or "").strip()
+        return str(result or "").strip()
+    except Exception:
+        return ""
+    finally:
+        _drop(path)
+
+
+def _transcribe_faster(audio: bytes) -> str:
     try:
         from faster_whisper import WhisperModel
     except ImportError:
         return ""
-    import tempfile
-
-    path = ""
+    path = _temp_audio(audio)
     try:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
-            handle.write(audio)
-            path = handle.name
         model = WhisperModel("base", device="cpu", compute_type="int8")
         segments, _info = model.transcribe(path)
         return " ".join(segment.text.strip() for segment in segments).strip()
     except Exception:
         return ""
     finally:
-        if path and os.path.exists(path):
-            os.unlink(path)
+        _drop(path)
 
 
 def run_local_turn(
