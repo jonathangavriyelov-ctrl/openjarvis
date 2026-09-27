@@ -236,6 +236,7 @@ export interface RoiWorld extends RoiLine {
   time_value: number;
   llm: number;
   higgsfield: number;
+  voice?: number;
   recurring: number;
   budget: number;
   roi: number | null;

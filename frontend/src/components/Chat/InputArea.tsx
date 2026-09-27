@@ -12,6 +12,7 @@ import {
 } from '../../lib/chat-telemetry';
 import { MicButton } from './MicButton';
 import { ProviderSwitcher } from './ProviderSwitcher';
+import { VoiceCall } from './VoiceCall';
 import { sendPersonalChat } from '../../lib/personal-api';
 import { modelFor, normalizeProvider } from '../../lib/chat-providers';
 import { useSpeech } from '../../hooks/useSpeech';
@@ -618,6 +619,27 @@ export function InputArea() {
       <div className="mb-2 flex flex-col gap-1">
         <div className="flex items-center gap-2 flex-wrap">
           <ProviderSwitcher />
+          <VoiceCall
+            onTranscript={(turn) => {
+              if (!turn.text.trim()) return;
+              const state = useAppStore.getState();
+              const brain = normalizeProvider(
+                state.conversations.find((item) => item.id === state.activeId)?.provider
+                  || state.draftProvider,
+              );
+              let convId = state.activeId;
+              if (!convId) convId = state.createConversation(modelFor(brain), brain);
+              state.addMessage(convId, {
+                id: generateId(),
+                role: turn.role,
+                content: turn.text,
+                timestamp: Date.now(),
+                answeredBy: turn.role === 'assistant' ? turn.label : undefined,
+                answeredModel: turn.role === 'assistant' ? turn.model : undefined,
+                fallbackNote: turn.role === 'assistant' ? turn.note : undefined,
+              });
+            }}
+          />
           <button
             type="button"
             onClick={() => setDeepResearch(!deepResearch)}

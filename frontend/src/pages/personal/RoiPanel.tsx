@@ -100,7 +100,7 @@ export function RoiPanel() {
         {money(overall.cost)} cost, {money(overall.value)} value, net {money(overall.net)}.
       </p>
       <p className="muted">
-        Models {money(overall.llm)} · pictures {money(overall.higgsfield)} · other {money(overall.recurring)}
+        Models {money(overall.llm)} · voice {money(overall.voice || 0)} · pictures {money(overall.higgsfield)} · other {money(overall.recurring)}
         {report.gateway ? ` · OmniRoute reported ${money(report.gateway.cost)} over ${report.gateway.range}` : ''}
       </p>
       {error && <p className="os-error">{error}</p>}

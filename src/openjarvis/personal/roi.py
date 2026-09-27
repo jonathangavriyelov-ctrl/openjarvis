@@ -308,6 +308,32 @@ class RoiLedger:
         self._note_threshold(world_id)
         return amount
 
+    def record_voice(
+        self,
+        *,
+        world_id: str,
+        specialist_id: str,
+        model: str,
+        seconds: float,
+        amount: float,
+    ) -> float:
+        """Add paid voice minutes. Local speech passes amount 0 and is skipped."""
+        billed = max(0.0, float(amount))
+        if billed <= 0:
+            return 0.0
+        self.office.store.add_spend(
+            world_id=world_id,
+            specialist_id=specialist_id or "desk",
+            kind="voice",
+            amount=billed,
+            month=current_month(),
+            model=model,
+            input_tokens=int(max(0.0, seconds)),
+            detail="voice minutes",
+        )
+        self._note_threshold(world_id)
+        return billed
+
     def add_revenue(
         self, *, world_id: str, amount: float, note: str = "", source: str = "manual"
     ) -> dict[str, Any]:
@@ -404,10 +430,11 @@ class RoiLedger:
             )
         llm = sum(row["amount"] for row in spend if row["kind"] == "llm")
         pictures = sum(row["amount"] for row in spend if row["kind"] == "higgsfield")
+        voice = sum(row["amount"] for row in spend if row["kind"] == "voice")
         recurring = sum(
             float(item.get("amount") or 0) for item in settings["recurring"]
         )
-        cost = llm + pictures + recurring
+        cost = llm + pictures + voice + recurring
         revenue_total = sum(row["amount"] for row in revenue)
         hours = self.office.store.completed_task_count(month) * minutes / 60
         overall = picture(
@@ -419,6 +446,7 @@ class RoiLedger:
         )
         overall["llm"] = _money(llm)
         overall["higgsfield"] = _money(pictures)
+        overall["voice"] = _money(voice)
         overall["recurring"] = _money(recurring)
         agents = self._agents(spend, names)
         gateway = self._gateway()
@@ -454,6 +482,7 @@ class RoiLedger:
         rows = [row for row in spend if row["world_id"] == world_id]
         llm = sum(row["amount"] for row in rows if row["kind"] == "llm")
         pictures = sum(row["amount"] for row in rows if row["kind"] == "higgsfield")
+        voice = sum(row["amount"] for row in rows if row["kind"] == "voice")
         extra = sum(
             float(item.get("amount") or 0)
             for item in settings["recurring"]
@@ -462,7 +491,7 @@ class RoiLedger:
         earned = sum(row["amount"] for row in revenue if row["world_id"] == world_id)
         tasks = self.office.store.completed_task_count(month, world_id)
         view = picture(
-            cost=llm + pictures + extra,
+            cost=llm + pictures + voice + extra,
             revenue=earned,
             hours=tasks * minutes / 60,
             hourly_rate=rate,
@@ -474,6 +503,7 @@ class RoiLedger:
                 "name": world["name"],
                 "llm": _money(llm),
                 "higgsfield": _money(pictures),
+                "voice": _money(voice),
                 "recurring": _money(extra),
             }
         )
@@ -486,7 +516,7 @@ class RoiLedger:
 
         buckets: dict[tuple[str, str], dict[str, Any]] = {}
         for row in spend:
-            if row["kind"] not in {"llm", "higgsfield"}:
+            if row["kind"] not in {"llm", "higgsfield", "voice"}:
                 continue
             key = (row["world_id"], row["specialist_id"])
             bucket = buckets.setdefault(

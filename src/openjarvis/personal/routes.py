@@ -55,6 +55,33 @@ class PersonalChatRequest(BaseModel):
     world_id: str = ""
 
 
+class VoiceSessionRequest(BaseModel):
+    provider: str = "grok"
+    private: bool = False
+    world_id: str = ""
+
+
+class VoiceTurnRequest(BaseModel):
+    audio_base64: str = ""
+    transcript: str = ""
+    practice: bool = False
+    provider: str = "grok"
+    private: bool = False
+    eli5: bool = False
+    world_id: str = ""
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class VoiceUsageRequest(BaseModel):
+    mode: str = "local"
+    provider: str = "grok"
+    seconds: float = 0
+    connected: bool = False
+    world_id: str = ""
+    model: str = ""
+    specialist_id: str = "desk"
+
+
 class GoalRequest(BaseModel):
     title: str = Field(..., min_length=1)
     target: str = "Completed"
@@ -575,6 +602,88 @@ def personal_chat(body: PersonalChatRequest, request: Request) -> dict[str, Any]
         engine=getattr(request.app.state, "engine", None),
         caller=caller,
     )
+
+
+def _voice_budget(office: PersonalOffice, world_id: str) -> dict[str, float]:
+    settings = office.roi.settings()
+    caps = settings["budgets"]
+    spent_world, spent_overall = office.roi._spent(world_id or "")
+    worlds = caps.get("worlds") or {}
+    return {
+        "spent_overall": spent_overall,
+        "spent_world": spent_world,
+        "overall_cap": float(caps.get("overall") or 0),
+        "world_cap": float(worlds.get(world_id) or 0) if world_id else 0.0,
+    }
+
+
+@personal_router.post("/voice/session")
+def personal_voice_session(
+    body: VoiceSessionRequest, request: Request
+) -> dict[str, Any]:
+    """Mint a short-lived voice token, or describe the on-this-Mac path."""
+    from openjarvis.personal.voice_call import plan_session
+
+    office = _office_from_app(request)
+    mint = getattr(request.app.state, "voice_minter", None)
+    return plan_session(
+        body.provider or "grok",
+        private=body.private,
+        mint=mint,
+        **_voice_budget(office, body.world_id),
+    )
+
+
+@personal_router.post("/voice/turn")
+def personal_voice_turn(body: VoiceTurnRequest, request: Request) -> dict[str, Any]:
+    """One hands-free utterance on the local listen-answer-speak path."""
+    import base64
+
+    from openjarvis.personal.voice_call import run_local_turn
+
+    audio = b""
+    if body.audio_base64.strip():
+        try:
+            audio = base64.b64decode(body.audio_base64, validate=False)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400, detail="That audio could not be read."
+            ) from exc
+    return run_local_turn(
+        audio=audio,
+        transcript=body.transcript,
+        practice=body.practice,
+        provider=body.provider or "grok",
+        private=body.private,
+        eli5=body.eli5,
+        messages=body.messages,
+        engine=getattr(request.app.state, "engine", None),
+        caller=getattr(request.app.state, "chat_caller", None),
+        transcriber=getattr(request.app.state, "voice_transcriber", None),
+    )
+
+
+@personal_router.post("/voice/usage")
+def personal_voice_usage(
+    body: VoiceUsageRequest, request: Request
+) -> dict[str, Any]:
+    """Record paid voice time. A hangup before connect is not billed."""
+    from openjarvis.personal.voice_call import voice_cost
+
+    if not body.connected or body.mode != "realtime" or body.seconds <= 0:
+        return {"amount": 0.0, "recorded": False}
+    amount = voice_cost(body.mode, body.provider, body.seconds)
+    if amount <= 0:
+        return {"amount": 0.0, "recorded": False}
+    office = _office_from_app(request)
+    office.roi.record_voice(
+        world_id=body.world_id,
+        specialist_id=body.specialist_id or "desk",
+        model=body.model or body.provider,
+        seconds=body.seconds,
+        amount=amount,
+    )
+    return {"amount": amount, "recorded": True}
 
 
 @personal_router.get("/providers")

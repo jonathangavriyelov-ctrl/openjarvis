@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { ProviderSwitcher } from '../../components/Chat/ProviderSwitcher';
+import { VoiceCall } from '../../components/Chat/VoiceCall';
 import {
   readStoredProvider,
   writeStoredProvider,
@@ -169,6 +170,15 @@ export function ChiefPage() {
               writeStoredProvider(providerKey, next);
             }}
           />
+          <div style={{ marginTop: 8 }}>
+            <VoiceCall
+              eli5={eli5}
+              provider={provider}
+              worldId={deskWorld || ''}
+              label={eli5 ? 'Talk out loud' : 'Talk to Jarvis'}
+              storageKey={`openjarvis-voice:chief:${deskWorld || 'all'}`}
+            />
+          </div>
         </div>
         <label className="os-label" htmlFor="chief-request">{eli5 ? 'What do you want?' : 'Request'}</label>
         <textarea
