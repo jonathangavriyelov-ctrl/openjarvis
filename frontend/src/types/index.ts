@@ -120,6 +120,9 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  answeredBy?: string;
+  answeredModel?: string;
+  fallbackNote?: string;
   toolCalls?: ToolCallInfo[];
   researchTraces?: ResearchSearchTrace[];
   researchSources?: ResearchSource[];
@@ -135,6 +138,7 @@ export interface Conversation {
   createdAt: number;
   updatedAt: number;
   model: string;
+  provider?: 'grok' | 'claude' | 'openai' | 'local';
   messages: ChatMessage[];
 }
 

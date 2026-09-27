@@ -59,6 +59,15 @@ PRICING: Dict[str, tuple[float, float]] = {
     "grok-2": (2.00, 10.00),
     "grok-3": (3.00, 15.00),
     "grok-4": (3.00, 15.00),
+    "grok-4.7": (3.00, 15.00),
+    "grok-4.3": (3.00, 15.00),
+    "grok-4.20-0309-non-reasoning": (3.00, 15.00),
+    "claude-opus-5-5": (5.00, 25.00),
+    "claude-sonnet-5": (3.00, 15.00),
+    "claude-fable-5-1": (10.00, 50.00),
+    "gpt-6-sol": (5.00, 30.00),
+    "gpt-6-astra": (2.50, 10.00),
+    "gpt-6-luna": (0.50, 2.00),
 }
 
 _MINIMAX_M3_LONG_CONTEXT_THRESHOLD = 512_000
@@ -72,6 +81,9 @@ _OPENAI_MODELS = [
     "gpt-5.4",
     "gpt-5-mini",
     "o3-mini",
+    "gpt-6-sol",
+    "gpt-6-astra",
+    "gpt-6-luna",
 ]
 _ANTHROPIC_MODELS = [
     "claude-sonnet-4-20250514",
@@ -81,6 +93,9 @@ _ANTHROPIC_MODELS = [
     "claude-sonnet-4-6",
     "claude-haiku-4-5",
     "claude-haiku-4-5-20251001",
+    "claude-opus-5-5",
+    "claude-sonnet-5",
+    "claude-fable-5-1",
 ]
 _GOOGLE_MODELS = [
     "gemini-2.5-pro",
@@ -107,6 +122,9 @@ _XAI_MODELS = [
     "grok-3-mini",
     "grok-4",
     "grok-2",
+    "grok-4.7",
+    "grok-4.3",
+    "grok-4.20-0309-non-reasoning",
 ]
 
 # OpenRouter models — prefixed with "openrouter/" so they can be identified
@@ -187,6 +205,12 @@ def _is_openai_model(model: str) -> bool:
     if m in (name.lower() for name in _OPENAI_MODELS):
         return True
     return m.startswith(_OPENAI_PREFIXES)
+
+
+def _apply_gpt6_effort(model: str, create_kwargs: Dict[str, Any]) -> None:
+    """gpt-6 tool calls need reasoning_effort none on chat completions."""
+    if model.startswith("gpt-6") and "reasoning_effort" not in create_kwargs:
+        create_kwargs["reasoning_effort"] = "none"
 
 
 def _is_openai_reasoning_model(model: str) -> bool:
@@ -640,6 +664,7 @@ class CloudEngine(InferenceEngine):
         }
         if not _is_openai_reasoning_model(model):
             create_kwargs["temperature"] = temperature
+        _apply_gpt6_effort(model, create_kwargs)
 
         # Apply structured output / JSON mode
         if response_format is not None:
@@ -1705,6 +1730,7 @@ class CloudEngine(InferenceEngine):
             }
             if not _is_openai_reasoning_model(model):
                 create_kwargs["temperature"] = temperature
+            _apply_gpt6_effort(model, create_kwargs)
         resp = client.chat.completions.create(**create_kwargs)
         for chunk in resp:
             choice = chunk.choices[0] if chunk.choices else None

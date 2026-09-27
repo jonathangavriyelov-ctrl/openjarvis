@@ -210,6 +210,7 @@ class PersonalOffice:
         self._run_lock = threading.Lock()
         self._thread_lock = threading.Lock()
         self._threads: dict[str, threading.Thread] = {}
+        self._mission_providers: dict[str, str] = {}
 
     def _presence(
         self,
@@ -432,6 +433,22 @@ class PersonalOffice:
             Message(role=Role.SYSTEM, content=render_system_prompt(spec, extra=extra)),
             Message(role=Role.USER, content=user_text),
         ]
+        chat_provider = str(self._turn.get("chat_provider") or "")
+        from openjarvis.core.config import RoutingConfig
+
+        private = bool(
+            (self.routing or RoutingConfig()).private_local_only
+            and self._task_is_private(spec)
+        )
+        if chat_provider and not private:
+            return self._generate_switched(
+                spec,
+                specialist_id,
+                user_text,
+                messages,
+                world_id,
+                chat_provider,
+            )
         if getattr(choice, "route", "") == "omniroute":
             payload = [
                 {"role": message.role.value, "content": message.content or ""}
@@ -501,6 +518,172 @@ class PersonalOffice:
             )
         return cleaned or None
 
+    def _choice_for_provider(self, provider: str, spec: Any) -> Any:
+        from openjarvis.chat_switch import model_for
+
+        if provider == "local":
+            available, engine_ok = self._probe_engine()
+            return resolve_executive_model(
+                self.hermes_model,
+                self._fallback_id(),
+                available,
+                engine_ok,
+            )
+        return self._model_via_engine(
+            spec, model_for(provider), self._engine_choice(spec.id)
+        )
+
+    def _complete_choice(
+        self,
+        choice: Any,
+        messages: list[Any],
+        *,
+        world_id: str,
+        specialist_id: str,
+        user_text: str,
+    ) -> tuple[str | None, str]:
+        """One model call. The error text is for classification, not display."""
+        self._calls.used = choice
+        if choice.source == "offline" or not choice.model_id or self.engine is None:
+            return None, "offline"
+        try:
+            result = self.engine.generate(
+                messages,
+                model=choice.model_id,
+                temperature=0.4,
+                max_tokens=900,
+            )
+        except Exception as exc:
+            logger.debug("Model call failed for %s", specialist_id, exc_info=True)
+            return None, str(exc)
+        usage: dict[str, Any] = {}
+        if isinstance(result, dict):
+            text = result.get("content") or ""
+            usage_value = result.get("usage")
+            raw_usage = usage_value if isinstance(usage_value, dict) else {}
+            cost = result.get("cost_usd")
+            usage = {
+                "input_tokens": raw_usage.get("prompt_tokens")
+                or raw_usage.get("input_tokens"),
+                "output_tokens": raw_usage.get("completion_tokens")
+                or raw_usage.get("output_tokens"),
+            }
+            if isinstance(cost, (int, float)) and cost > 0:
+                usage["reported_cost"] = float(cost)
+        else:
+            text = str(result or "")
+        cleaned = text.strip()
+        if cleaned:
+            self._record_llm(
+                world_id,
+                specialist_id,
+                choice.model_id,
+                user_text,
+                cleaned,
+                usage,
+            )
+        return cleaned or None, ""
+
+    def _generate_switched(
+        self,
+        spec: Any,
+        specialist_id: str,
+        user_text: str,
+        messages: list[Any],
+        world_id: str,
+        chat_provider: str,
+    ) -> str | None:
+        """Try the conversation's provider, then Grok, Claude, and Local."""
+        from openjarvis.chat_switch import (
+            attempt_order,
+            credits_error,
+            mark_needs_credits,
+            normalize_choice,
+        )
+
+        requested = normalize_choice(chat_provider)
+        action, _estimate = self.roi.decide(world_id, specialist_id, user_text)
+        if action != "ok":
+            local = self._engine_choice(spec.id)
+            text, _error = self._complete_choice(
+                local,
+                messages,
+                world_id=world_id,
+                specialist_id=specialist_id,
+                user_text=user_text,
+            )
+            if text:
+                self._remember_answer(
+                    requested,
+                    "local",
+                    local.model_id,
+                    needs_credits=False,
+                )
+            return text
+        saw_credits = False
+        for provider in attempt_order(requested):
+            alt = self._choice_for_provider(provider, spec)
+            alt = self._fit_budget(alt, specialist_id, world_id, user_text)
+            text, error = self._complete_choice(
+                alt,
+                messages,
+                world_id=world_id,
+                specialist_id=specialist_id,
+                user_text=user_text,
+            )
+            if credits_error(error):
+                saw_credits = True
+                mark_needs_credits(provider)
+                self._turn["needs_credits"] = True
+            if not text:
+                continue
+            self._remember_answer(
+                requested,
+                provider,
+                alt.model_id,
+                needs_credits=saw_credits,
+            )
+            return text
+        return None
+
+    def _remember_answer(
+        self,
+        requested: str,
+        answered: str,
+        model_id: str,
+        *,
+        needs_credits: bool,
+    ) -> None:
+        from openjarvis.chat_switch import fallback_note
+
+        self._turn["answered_by"] = answered
+        self._turn["answered_model"] = model_id
+        note = fallback_note(
+            requested,
+            answered,
+            needs_credits=needs_credits,
+            eli5=bool(self._turn.get("eli5")),
+        )
+        if note:
+            self._turn["answered_note"] = note
+        if needs_credits:
+            self._turn["needs_credits"] = True
+
+    def _chat_model_fields(self) -> dict[str, Any]:
+        fields: dict[str, Any] = {}
+        provider = str(self._turn.get("chat_provider") or "")
+        if provider:
+            fields["provider"] = provider
+        if self._turn.get("answered_note"):
+            fields["answered_note"] = self._turn["answered_note"]
+        if self._turn.get("answered_by"):
+            fields["answered_by"] = self._turn["answered_by"]
+        if self._turn.get("answered_model"):
+            fields["answered_model"] = self._turn["answered_model"]
+        if self._turn.get("needs_credits"):
+            fields["needs_credits"] = True
+        return fields
+
     def _apply_message_route(self, choice: Any, spec: Any, text: str) -> Any:
         """@mentions and keyword rules can replace the specialist's model."""
         from openjarvis.core.config import RoutingConfig
@@ -529,6 +712,15 @@ class PersonalOffice:
                     route="offline",
                 )
             return local
+        pinned = (self.specialist_models.get(spec.id) or "").strip()
+        world_id = str(self._turn.get("world_id") or "")
+        if world_id and world_id != OVERALL:
+            for row in self.store.team(world_id):
+                named = (row.get("omniroute_model") or "").strip()
+                if row.get("specialist_id") == spec.id and named:
+                    pinned = named
+        if pinned and not mention_model(text):
+            return choice
         if not mention_model(text) and not message_has_keyword(policy, text):
             return choice
         tags = ["quick", "private"] if spec.prefers_hermes else []
@@ -986,6 +1178,7 @@ class PersonalOffice:
         project_id: str | None = None,
         world_id: str | None = None,
         scope: str = "auto",
+        provider: str = "",
     ) -> dict[str, Any]:
         text = (request or "").strip()
         if not text:
@@ -1003,6 +1196,12 @@ class PersonalOffice:
             command=command.name if command else "",
             world_id=target,
         )
+        if provider.strip():
+            from openjarvis.chat_switch import normalize_choice
+
+            chosen = normalize_choice(provider)
+            self._mission_providers[mission["id"]] = chosen
+            self.store.update_mission(mission["id"], model={"provider": chosen})
         thread = threading.Thread(
             target=self._execute,
             args=(mission["id"],),
@@ -1021,9 +1220,12 @@ class PersonalOffice:
         request: str,
         world_id: str | None = None,
         scope: str = "auto",
+        provider: str = "",
     ) -> dict[str, Any]:
         """Run a mission and wait. Used by tests and the check-in endpoint."""
-        mission = self.submit_mission(request, world_id=world_id, scope=scope)
+        mission = self.submit_mission(
+            request, world_id=world_id, scope=scope, provider=provider
+        )
         thread = self._threads[mission["id"]]
         thread.join()
         return self.mission_detail(mission["id"])
@@ -1126,11 +1328,17 @@ class PersonalOffice:
         mission_id = mission["id"]
         request = mission["request"]
         world_id = mission.get("world_id") or self._personal_id()
+        raw_model = mission.get("model")
+        saved_model = raw_model if isinstance(raw_model, dict) else {}
+        chat_provider = self._mission_providers.pop(mission_id, "") or str(
+            (saved_model or {}).get("provider") or ""
+        )
         self._turn = {
             "eli5": self.eli5_enabled(),
             "command": None,
             "world_id": world_id,
             "google": {},
+            "chat_provider": chat_provider,
         }
         if world_id == OVERALL:
             self._run_overall(mission)
@@ -1163,6 +1371,7 @@ class PersonalOffice:
             "google": self._google_snapshot(request, desk),
             "world_id": world_id,
             "desk": desk,
+            "chat_provider": chat_provider,
         }
         planned = None
         planner_source = "offline"
@@ -1194,6 +1403,7 @@ class PersonalOffice:
                 "executive_assistant": executive.to_dict(),
                 "command": command.name if command else "",
                 "eli5": bool(self._turn.get("eli5")),
+                **self._chat_model_fields(),
             },
         )
         project_id = mission.get("project_id") or ""
@@ -1275,11 +1485,15 @@ class PersonalOffice:
                 "Delegation did not finish",
             )
         self._file_proposals(request, mission_id, world_id)
+        stored = self.store.get_mission(mission_id) or {}
+        model = dict(stored.get("model") or {})
+        model.update(self._chat_model_fields())
         self.store.update_mission(
             mission_id,
             status=status,
             summary=summary,
             workflow=workflow,
+            model=model,
         )
 
     def _delegation_graph(

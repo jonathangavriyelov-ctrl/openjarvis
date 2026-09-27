@@ -16,9 +16,9 @@ from openjarvis.core.config import RoutingConfig, RoutingRule
 _LOCAL_HOSTS = {"", "localhost", "127.0.0.1", "::1"}
 
 _MENTIONS = (
-    ("@claude", "claude-sonnet-4-6"),
-    ("@grok", "grok-3"),
-    ("@gpt", "gpt-4o"),
+    ("@claude", "claude-opus-5-5"),
+    ("@grok", "grok-4.7"),
+    ("@gpt", "gpt-6-sol"),
     ("@local", "hermes3:8b"),
 )
 
@@ -47,7 +47,7 @@ def concrete_model(model: str) -> str:
     """Turn a family such as ``grok-*`` into one callable model id."""
     text = (model or "").strip()
     if text in {"grok-*", "grok"}:
-        return "grok-3"
+        return "grok-4.7"
     return text
 
 

@@ -43,6 +43,16 @@ class MissionRequest(BaseModel):
     project_id: Optional[str] = None
     world_id: Optional[str] = None
     scope: str = "auto"
+    provider: Optional[str] = None
+
+
+class PersonalChatRequest(BaseModel):
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    message: str = ""
+    provider: str = "grok"
+    private: bool = False
+    eli5: bool = False
+    world_id: str = ""
 
 
 class GoalRequest(BaseModel):
@@ -401,6 +411,7 @@ def personal_submit_mission(body: MissionRequest, request: Request) -> dict[str,
             project_id=body.project_id,
             world_id=body.world_id,
             scope=body.scope or "auto",
+            provider=body.provider or "",
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -525,6 +536,44 @@ def personal_capture_note(body: NoteRequest, request: Request) -> dict[str, Any]
 def personal_ask(body: AskRequest, request: Request) -> dict[str, Any]:
     return _office_from_app(request).ask_memory(
         body.question, world_id=body.world_id or None
+    )
+
+
+@personal_router.post("/chat")
+def personal_chat(body: PersonalChatRequest, request: Request) -> dict[str, Any]:
+    """Answer one turn with the conversation's provider, then fall back."""
+    from openjarvis.chat_switch import answer_chat
+
+    messages = []
+    for item in body.messages:
+        if not isinstance(item, dict):
+            continue
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        messages.append(
+            {"role": str(item.get("role") or "user"), "content": content}
+        )
+    if body.message.strip():
+        messages.append({"role": "user", "content": body.message.strip()})
+    if not messages:
+        raise HTTPException(status_code=400, detail="Say something first.")
+    office = _office_from_app(request)
+    private = body.private
+    if body.world_id:
+        action, _estimate = office.roi.decide(
+            body.world_id, "chief_of_staff", messages[-1]["content"]
+        )
+        if action != "ok":
+            private = True
+    caller = getattr(request.app.state, "chat_caller", None)
+    return answer_chat(
+        messages,
+        body.provider or "grok",
+        private=private,
+        eli5=body.eli5,
+        engine=getattr(request.app.state, "engine", None),
+        caller=caller,
     )
 
 

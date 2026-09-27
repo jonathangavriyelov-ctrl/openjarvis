@@ -1787,25 +1787,25 @@ def suggested_routing_rules() -> List["RoutingRule"]:
         RoutingRule(
             agent="chief_of_staff",
             tags=["planning"],
-            model="claude-sonnet-4-6",
+            model="claude-opus-5-5",
             fallback="hermes3:8b",
         ),
         RoutingRule(
             tags=["planning", "writing", "code"],
             keywords=["plan", "write", "draft", "code", "implement"],
-            model="claude-sonnet-4-6",
+            model="claude-opus-5-5",
             fallback="hermes3:8b",
         ),
         RoutingRule(
             tags=["realtime", "current"],
             keywords=["current events", "latest news", "right now", "breaking"],
-            model="grok-3",
+            model="grok-4.7",
             fallback="hermes3:8b",
         ),
         RoutingRule(
             tags=["vision", "image", "json"],
             keywords=["screenshot", "image", "photo", "json"],
-            model="gpt-4o",
+            model="gpt-6-sol",
             fallback="hermes3:8b",
         ),
     ]
@@ -2250,6 +2250,18 @@ def load_config(path: Optional[Path] = None) -> JarvisConfig:
     # Apply profile even without a config file (in case defaults set one)
     if not config_path.exists() and cfg.security.profile:
         apply_security_profile(cfg.security, cfg.server)
+
+    # Cloud-enabled desks start on Grok unless the config names a model.
+    raw_intel = data.get("intelligence")
+    intel = raw_intel if isinstance(raw_intel, dict) else {}
+    user_set_model = bool(str((intel or {}).get("default_model") or "").strip())
+    current_model = (cfg.intelligence.default_model or "").strip()
+    if (
+        os.environ.get("XAI_API_KEY")
+        and not user_set_model
+        and current_model in {"", "qwen3.5:4b"}
+    ):
+        cfg.intelligence.default_model = "grok-4.7"
 
     # The personal desk does not contact NVIDIA NIM unless config opts in.
     if os.environ.get("OPENJARVIS_PERSONAL_OS") == "1":

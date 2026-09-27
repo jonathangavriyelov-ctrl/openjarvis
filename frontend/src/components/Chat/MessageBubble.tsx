@@ -12,6 +12,7 @@ import { ResearchTimeline } from './ResearchTimeline';
 import { rehypeCitations } from '../../lib/rehype-citations';
 import { XRayFooter } from './XRayFooter';
 import type { ChatMessage } from '../../types';
+import './ProviderSwitcher.css';
 
 function stripThinkTags(text: string): string {
   let cleaned = text.replace(/<think>[\s\S]*?<\/think>\s*/gi, '');
@@ -162,6 +163,14 @@ export function MessageBubble({ message, isLive = false }: Props) {
 
       {/* Audio player (e.g. morning digest) */}
       {message.audio?.url && <AudioPlayer src={message.audio.url} />}
+
+      {(message.answeredBy || message.answeredModel) && (
+        <div className="reply-model">
+          {message.answeredBy || 'Answer'}
+          {message.answeredModel ? ` · ${message.answeredModel}` : ''}
+        </div>
+      )}
+      {message.fallbackNote && <p className="reply-note">{message.fallbackNote}</p>}
 
       {/* Assistant message */}
       {cleanContent && (

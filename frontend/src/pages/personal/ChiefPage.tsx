@@ -1,4 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import { ProviderSwitcher } from '../../components/Chat/ProviderSwitcher';
+import {
+  readStoredProvider,
+  writeStoredProvider,
+  type ChatProviderId,
+} from '../../lib/chat-providers';
 import { Link } from 'react-router';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -53,6 +59,8 @@ export function ChiefPage() {
   const [phone, setPhone] = useState<PhoneStatus | null>(null);
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
+  const providerKey = `openjarvis-provider:chief:${deskWorld || 'all'}`;
+  const [provider, setProvider] = useState<ChatProviderId>(() => readStoredProvider(providerKey));
 
   const refreshDesk = () => {
     fetchBriefing(deskWorld).then(setBriefing).catch(() => {});
@@ -63,6 +71,10 @@ export function ChiefPage() {
   const refreshHistory = () => {
     fetchMissions(deskWorld).then((data) => setHistory(data.missions)).catch(() => {});
   };
+
+  useEffect(() => {
+    setProvider(readStoredProvider(providerKey));
+  }, [providerKey]);
 
   useEffect(() => {
     fetchMissions(deskWorld)
@@ -110,6 +122,7 @@ export function ChiefPage() {
       const created = await submitMission(text, {
         worldId: deskWorld,
         scope: deskWorld ? 'auto' : 'route',
+        provider,
       });
       setMission(created);
       setRequest('');
@@ -146,6 +159,16 @@ export function ChiefPage() {
               /sc:{command.name}
             </button>
           ))}
+        </div>
+        <div style={{ margin: '8px 0 12px' }}>
+          <ProviderSwitcher
+            eli5={eli5}
+            value={provider}
+            onChange={(next) => {
+              setProvider(next);
+              writeStoredProvider(providerKey, next);
+            }}
+          />
         </div>
         <label className="os-label" htmlFor="chief-request">{eli5 ? 'What do you want?' : 'Request'}</label>
         <textarea
@@ -272,6 +295,16 @@ export function ChiefPage() {
           <div className="os-card">
             <h2>Plan · {statusLabel(mission.status, eli5)}{mission.command ? ` · /sc:${mission.command}` : ''}</h2>
             <p className="muted">{mission.request}</p>
+            {typeof mission.model?.answered_note === 'string' && mission.model.answered_note && (
+              <p className="reply-note">{mission.model.answered_note}</p>
+            )}
+            {typeof mission.model?.answered_model === 'string' && mission.model.answered_model && (
+              <p className="reply-model">
+                Answered by {String(mission.model.answered_by || mission.model.answered_model)}
+                {' · '}
+                {mission.model.answered_model}
+              </p>
+            )}
             {mission.plan?.length > 0 && (
               <ol className="muted" style={{ marginTop: 10, paddingLeft: 18 }}>
                 {mission.plan.map((step) => (

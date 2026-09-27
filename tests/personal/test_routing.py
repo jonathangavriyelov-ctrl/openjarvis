@@ -82,7 +82,7 @@ def test_rule_uses_claude_when_the_key_is_set(monkeypatch):
         tags=["planning"],
         local_model="hermes3:8b",
     )
-    assert decision.model == "claude-sonnet-4-6"
+    assert decision.model == "claude-opus-5-5"
     assert decision.provider == "anthropic"
     assert "sk-ant-test" not in str(decision)
 
@@ -97,7 +97,7 @@ def test_mention_and_explicit_model_win(monkeypatch):
         text="Check @grok for the latest",
         local_model="hermes3:8b",
     )
-    assert mentioned.model == "grok-3"
+    assert mentioned.model == "grok-4.7"
     assert mentioned.source == "mention"
     explicit = select_model(
         RoutingConfig(),
@@ -116,7 +116,7 @@ def test_mention_and_explicit_model_win(monkeypatch):
     )
     assert explicit.model == "gpt-4o"
     assert explicit.source == "explicit"
-    assert apply_mention("hermes3:8b", "ask @claude") == "claude-sonnet-4-6"
+    assert apply_mention("hermes3:8b", "ask @claude") == "claude-opus-5-5"
 
 
 def test_private_task_stays_local(monkeypatch):
@@ -163,7 +163,7 @@ def test_keyword_rule_needs_the_provider_key(monkeypatch):
         text="Draft a launch post",
         local_model="qwen3.5:4b",
     )
-    assert cloud.model == "claude-sonnet-4-6"
+    assert cloud.model == "claude-opus-5-5"
 
 
 def test_custom_rule_matches_one_keyword(monkeypatch):
@@ -295,9 +295,11 @@ def test_cloud_call_is_added_to_the_roi_ledger(tmp_path, monkeypatch):
         )
         assert task["model_id"] == "claude-sonnet-4-6"
         spend = office.store.spend_rows(office.roi.report()["month"])
-        assert spend
-        assert spend[0]["model"] == "claude-sonnet-4-6"
-        assert spend[0]["amount"] > 0
+        pinned = [
+            row for row in spend if row["model"] == "claude-sonnet-4-6"
+        ]
+        assert pinned
+        assert pinned[0]["amount"] > 0
     finally:
         office.close()
 

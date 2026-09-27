@@ -523,7 +523,7 @@ export const fetchHermes = () =>
 
 export const submitMission = (
   request: string,
-  opts?: { worldId?: string | null; scope?: string },
+  opts?: { worldId?: string | null; scope?: string; provider?: string },
 ) =>
   read<Mission>('/v1/personal/missions', {
     method: 'POST',
@@ -531,7 +531,32 @@ export const submitMission = (
       request,
       world_id: opts?.worldId || null,
       scope: opts?.worldId ? 'auto' : opts?.scope || 'auto',
+      provider: opts?.provider || 'grok',
     }),
+  });
+
+export interface ChatReply {
+  ok: boolean;
+  content: string;
+  provider: string;
+  requested: string;
+  model: string;
+  label: string;
+  note: string;
+  needs_credits: boolean;
+}
+
+export const sendPersonalChat = (body: {
+  messages?: { role: string; content: string }[];
+  message?: string;
+  provider?: string;
+  private?: boolean;
+  eli5?: boolean;
+  world_id?: string;
+}) =>
+  read<ChatReply>('/v1/personal/chat', {
+    method: 'POST',
+    body: JSON.stringify(body),
   });
 
 export const fetchMission = (id: string) => read<Mission>(`/v1/personal/missions/${id}`);

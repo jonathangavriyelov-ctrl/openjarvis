@@ -11,6 +11,9 @@ import {
   resolveChatEngine,
 } from '../../lib/chat-telemetry';
 import { MicButton } from './MicButton';
+import { ProviderSwitcher } from './ProviderSwitcher';
+import { sendPersonalChat } from '../../lib/personal-api';
+import { modelFor, normalizeProvider } from '../../lib/chat-providers';
 import { useSpeech } from '../../hooks/useSpeech';
 import type {
   ChatMessage,
@@ -174,16 +177,23 @@ export function InputArea() {
   const sendMessage = useCallback(async () => {
     const content = input.trim();
     if (!content || streamState.isStreaming) return;
-    if (!selectedModel) {
+    if (deepResearch && !selectedModel) {
       toast.error('Pick a model first (⌘K)');
       return;
     }
+
+    const state = useAppStore.getState();
+    const provider = normalizeProvider(
+      state.conversations.find((item) => item.id === activeId)?.provider || state.draftProvider,
+    );
 
     setInput('');
 
     let convId = activeId;
     if (!convId) {
-      convId = createConversation(selectedModel);
+      convId = createConversation(selectedModel || modelFor(provider), provider);
+    } else if (!state.conversations.find((item) => item.id === convId)?.provider) {
+      state.setConversationProvider(convId, provider);
     }
 
     const userMsg: ChatMessage = {
@@ -200,6 +210,46 @@ export function InputArea() {
       role: m.role,
       content: m.content,
     }));
+
+    if (!deepResearch) {
+      setStreamState({
+        conversationId: convId,
+        isStreaming: true,
+        phase: 'Generating...',
+        elapsedMs: 0,
+        activeToolCalls: [],
+        content: '',
+      });
+      try {
+        const reply = await sendPersonalChat({
+          messages: apiMessages,
+          provider,
+          eli5: false,
+        });
+        if (reply.needs_credits) useAppStore.getState().setOpenaiNeedsCredits(true);
+        addMessage(convId, {
+          id: generateId(),
+          role: 'assistant',
+          content: reply.content,
+          timestamp: Date.now(),
+          answeredBy: reply.label || reply.model,
+          answeredModel: reply.model,
+          fallbackNote: reply.note || undefined,
+          telemetry: { model_id: reply.model, engine: reply.provider },
+        });
+      } catch {
+        addMessage(convId, {
+          id: generateId(),
+          role: 'assistant',
+          content: 'Nobody could answer just now.',
+          timestamp: Date.now(),
+          fallbackNote: 'The chat stayed open. Try again in a moment.',
+        });
+      } finally {
+        resetStream();
+      }
+      return;
+    }
 
     const assistantMsg: ChatMessage = {
       id: generateId(),
@@ -566,7 +616,8 @@ export function InputArea() {
   return (
     <div className="px-4 pb-4 pt-2" style={{ maxWidth: 'var(--chat-max-width)', margin: '0 auto', width: '100%' }}>
       <div className="mb-2 flex flex-col gap-1">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <ProviderSwitcher />
           <button
             type="button"
             onClick={() => setDeepResearch(!deepResearch)}
@@ -610,7 +661,7 @@ export function InputArea() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={selectedModel ? 'Message OpenJarvis...' : 'Pick a model first (⌘K)...'}
+          placeholder={deepResearch && !selectedModel ? 'Pick a model first (⌘K)...' : 'Message Jarvis...'}
           rows={1}
           className="flex-1 bg-transparent outline-none resize-none text-sm leading-relaxed"
           style={{ color: 'var(--color-text)', maxHeight: '200px' }}
@@ -635,8 +686,12 @@ export function InputArea() {
             />
             <button
               onClick={sendMessage}
-              disabled={streamState.isStreaming || !input.trim() || modelLoading || !selectedModel}
-              title={selectedModel ? 'Send message' : 'Pick a model first (⌘K)'}
+              disabled={
+                streamState.isStreaming
+                || !input.trim()
+                || (deepResearch && (modelLoading || !selectedModel))
+              }
+              title={deepResearch && !selectedModel ? 'Pick a model first (⌘K)' : 'Send message'}
               className="p-2 rounded-xl transition-colors shrink-0 cursor-pointer disabled:opacity-30 disabled:cursor-default"
               style={{
                 background: input.trim() ? 'var(--color-accent)' : 'var(--color-bg-tertiary)',

@@ -17,14 +17,14 @@ _PROVIDERS = (
         "name": "Anthropic",
         "env": "ANTHROPIC_API_KEY",
         "kind": "anthropic",
-        "model": "claude-haiku-4-5",
+        "model": "claude-opus-5-5",
     },
     {
         "id": "openai",
         "name": "OpenAI",
         "env": "OPENAI_API_KEY",
         "kind": "openai",
-        "model": "gpt-4o-mini",
+        "model": "gpt-6-sol",
         "base_url": "https://api.openai.com/v1",
     },
     {
@@ -32,7 +32,7 @@ _PROVIDERS = (
         "name": "xAI",
         "env": "XAI_API_KEY",
         "kind": "openai",
-        "model": "grok-3",
+        "model": "grok-4.7",
         "base_url": "https://api.x.ai/v1",
     },
 )
@@ -51,6 +51,8 @@ def _redact(text: str) -> str:
 
 def provider_status() -> list[dict[str, Any]]:
     """Connected or not, from environment presence only."""
+    from openjarvis.chat_switch import provider_needs_credits
+
     rows = []
     for spec in _PROVIDERS:
         rows.append(
@@ -58,6 +60,7 @@ def provider_status() -> list[dict[str, Any]]:
                 "id": spec["id"],
                 "name": spec["name"],
                 "connected": bool(os.environ.get(spec["env"])),
+                "needs_credits": provider_needs_credits(spec["id"]),
             }
         )
     return rows
@@ -95,26 +98,50 @@ def probe_provider(provider_id: str, *, timeout: float = 20.0) -> dict[str, Any]
                 timeout=timeout,
             )
         else:
+            payload: dict[str, Any] = {
+                "model": spec["model"],
+                "max_tokens": 8,
+                "messages": [{"role": "user", "content": _PROMPT}],
+            }
+            if str(spec["model"]).startswith("gpt-6"):
+                payload["reasoning_effort"] = "none"
             response = httpx.post(
                 f"{spec['base_url']}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {key}",
                     "content-type": "application/json",
                 },
-                json={
-                    "model": spec["model"],
-                    "max_tokens": 8,
-                    "messages": [{"role": "user", "content": _PROMPT}],
-                },
+                json=payload,
                 timeout=timeout,
             )
         if response.status_code >= 400:
+            from openjarvis.chat_switch import credits_error, mark_needs_credits
+
+            body = ""
+            try:
+                body = response.text or ""
+            except Exception:
+                body = ""
+            needs = credits_error(body)
+            if needs:
+                mark_needs_credits(spec["id"])
+            detail = (
+                "Needs credits."
+                if needs
+                else f"The provider returned {response.status_code}."
+            )
             return {
                 "ok": False,
-                "detail": _redact(f"The provider returned {response.status_code}."),
+                "detail": _redact(detail),
                 "model": spec["model"],
+                "needs_credits": needs,
             }
-        return {"ok": True, "detail": "Connected.", "model": spec["model"]}
+        return {
+            "ok": True,
+            "detail": "Connected.",
+            "model": spec["model"],
+            "needs_credits": False,
+        }
     except Exception as exc:
         return {
             "ok": False,

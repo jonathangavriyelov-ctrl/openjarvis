@@ -158,6 +158,8 @@ interface AppState {
   models: ModelInfo[];
   modelsLoading: boolean;
   selectedModel: string;
+  draftProvider: 'grok' | 'claude' | 'openai' | 'local';
+  openaiNeedsCredits: boolean;
   serverInfo: ServerInfo | null;
   savings: SavingsData | null;
 
@@ -184,7 +186,10 @@ interface AppState {
   // Actions: conversations
   loadConversations: () => void;
   importOverlayConversation: () => Promise<void>;
-  createConversation: (model?: string) => string;
+  createConversation: (model?: string, provider?: Conversation['provider']) => string;
+  setConversationProvider: (id: string, provider: NonNullable<Conversation['provider']>) => void;
+  setDraftProvider: (provider: NonNullable<Conversation['provider']>) => void;
+  setOpenaiNeedsCredits: (needsCredits: boolean) => void;
   selectConversation: (id: string) => void;
   deleteConversation: (id: string) => void;
   loadMessages: (conversationId: string | null) => void;
@@ -282,6 +287,8 @@ export const useAppStore = create<AppState>((set, get) => {
     models: [],
     modelsLoading: true,
     selectedModel: '',
+    draftProvider: 'grok',
+    openaiNeedsCredits: false,
     serverInfo: null,
     savings: null,
 
@@ -333,6 +340,7 @@ export const useAppStore = create<AppState>((set, get) => {
           createdAt: overlay.createdAt || Date.now(),
           updatedAt: overlay.updatedAt || Date.now(),
           model: overlay.model || 'default',
+          provider: overlay.provider || 'grok',
           messages: overlay.messages,
         };
         saveConversations(store);
@@ -346,7 +354,7 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    createConversation: (model?: string) => {
+    createConversation: (model?: string, provider?: Conversation['provider']) => {
       const store = loadConversations();
       const conv: Conversation = {
         id: generateId(),
@@ -354,6 +362,7 @@ export const useAppStore = create<AppState>((set, get) => {
         createdAt: Date.now(),
         updatedAt: Date.now(),
         model: model || get().selectedModel || 'default',
+        provider: provider || 'grok',
         messages: [],
       };
       store.conversations[conv.id] = conv;
@@ -368,6 +377,28 @@ export const useAppStore = create<AppState>((set, get) => {
       });
       return conv.id;
     },
+
+    setConversationProvider: (id, provider) => {
+      const store = loadConversations();
+      const conv = store.conversations[id];
+      if (!conv) {
+        set({ draftProvider: provider });
+        return;
+      }
+      conv.provider = provider;
+      conv.updatedAt = Date.now();
+      saveConversations(store);
+      set({
+        draftProvider: provider,
+        conversations: Object.values(store.conversations).sort(
+          (a, b) => b.updatedAt - a.updatedAt,
+        ),
+      });
+    },
+
+    setDraftProvider: (provider) => set({ draftProvider: provider }),
+
+    setOpenaiNeedsCredits: (needsCredits) => set({ openaiNeedsCredits: needsCredits }),
 
     selectConversation: (id: string) => {
       const store = loadConversations();
