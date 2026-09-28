@@ -3,17 +3,29 @@ import './VoiceCall.css';
 import { useAppStore } from '../../lib/store';
 import { modelFor, normalizeProvider, type ChatProviderId } from '../../lib/chat-providers';
 import {
+  MIC_CONSTRAINTS,
+  PCM_WORKLET,
+  TARGET_SAMPLE_RATE,
+  bargePlayback,
   concatFloats,
   costLine,
   emptyVad,
   encodeWav,
+  floatToPcm16,
   interpretRealtimeEvent,
   nextPhase,
+  openVoiceStream,
+  parseSseChunk,
   phaseLabel,
+  pickSpokenVoice,
+  postVoiceMetric,
+  recordMetric,
   recordVoiceUsage,
+  resampleLinear,
   sendVoiceTurn,
   startVoiceSession,
   stepVad,
+  timeToFirstAudio,
   type VoiceLine,
   type VoicePhase,
   type VoicePlan,
@@ -88,6 +100,18 @@ export function VoiceCall({
   const sourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const htmlAudioRef = useRef<HTMLAudioElement | null>(null);
   const aliveRef = useRef(false);
+  const itemIdRef = useRef('');
+  const playbackStartRef = useRef(0);
+  const earlyPcmRef = useRef<ArrayBuffer[]>([]);
+  const speechStoppedRef = useRef(0);
+  const ttfaLoggedRef = useRef(false);
+  const audioDoneRef = useRef(false);
+  const responseDoneRef = useRef(false);
+  const sentenceQueueRef = useRef<{ text: string; wav: string }[]>([]);
+  const generationRef = useRef(0);
+  const drainingRef = useRef(false);
+  const micReadyRef = useRef(false);
+  const speechDoneRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -131,8 +155,17 @@ export function VoiceCall({
       }
     });
     sourcesRef.current = [];
+    sentenceQueueRef.current = [];
+    generationRef.current += 1;
     htmlAudioRef.current?.pause();
+    speechDoneRef.current?.();
+    speechDoneRef.current = null;
     window.speechSynthesis?.cancel();
+    const context = audioRef.current as (AudioContext & { __next?: number }) | null;
+    if (context) {
+      context.__next = context.currentTime;
+    }
+    playbackStartRef.current = 0;
   };
 
   const releaseMic = () => {
@@ -142,89 +175,183 @@ export function VoiceCall({
     wsRef.current = null;
     audioRef.current?.close().catch(() => {});
     audioRef.current = null;
+    micReadyRef.current = false;
+    earlyPcmRef.current = [];
   };
 
-  const playPcm = (b64: string, sampleRate: number) => {
-    const context = audioRef.current;
-    if (!context || !b64) return;
-    const binary = atob(b64);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-    const samples = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
+  const maybeListen = () => {
+    if (!sourcesRef.current.length && (audioDoneRef.current || responseDoneRef.current)) {
+      setPhase('listening');
+    }
+  };
+
+  const playPcmBuffer = (bytes: ArrayBuffer, sampleRate: number) => {
+    const context = audioRef.current as (AudioContext & { __next?: number }) | null;
+    if (!context || bytes.byteLength < 2) return;
+    const samples = new Int16Array(bytes, 0, Math.floor(bytes.byteLength / 2));
     const buffer = context.createBuffer(1, samples.length, sampleRate);
     const channel = buffer.getChannelData(0);
     for (let index = 0; index < samples.length; index += 1) channel[index] = samples[index] / 32768;
     const source = context.createBufferSource();
     source.buffer = buffer;
     source.connect(context.destination);
-    const cursor = (context as AudioContext & { __next?: number });
-    const startAt = Math.max(context.currentTime, cursor.__next || 0);
+    const startAt = Math.max(context.currentTime, context.__next || 0);
+    if (!playbackStartRef.current) playbackStartRef.current = startAt;
     source.start(startAt);
-    cursor.__next = startAt + buffer.duration;
+    context.__next = startAt + buffer.duration;
     sourcesRef.current.push(source);
     setPhase('speaking');
     source.onended = () => {
       sourcesRef.current = sourcesRef.current.filter((item) => item !== source);
-      if (!sourcesRef.current.length && phaseRef.current === 'speaking') setPhase('listening');
+      maybeListen();
     };
   };
 
-  const speakReply = async (text: string, wav: string) => {
+  const noteFirstAudio = () => {
+    if (ttfaLoggedRef.current || !speechStoppedRef.current) return;
+    ttfaLoggedRef.current = true;
+    const elapsed = timeToFirstAudio(speechStoppedRef.current, performance.now());
+    recordMetric('ttfa_ms', elapsed);
+    void postVoiceMetric('ttfa_ms', elapsed).catch(() => {});
+  };
+
+  const bargeRealtime = () => {
+    const context = audioRef.current as (AudioContext & { __next?: number }) | null;
+    const clock = {
+      next: context?.__next || 0,
+      startedAt: playbackStartRef.current,
+    };
+    const played = context ? bargePlayback(clock, context.currentTime) : { next: 0, playedMs: 0 };
     stopPlayback();
+    if (context) context.__next = played.next;
+    const socket = wsRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'response.cancel' }));
+    if (itemIdRef.current) {
+      socket.send(JSON.stringify({
+        type: 'conversation.item.truncate',
+        item_id: itemIdRef.current,
+        content_index: 0,
+        audio_end_ms: played.playedMs,
+      }));
+    }
+  };
+
+  const speakReply = async (text: string, wav: string) => {
+    const generation = generationRef.current;
     setPhase('speaking');
-    const voices = window.speechSynthesis?.getVoices?.() || [];
-    if (text && voices.length) {
+    if (wav) {
+      const binary = atob(wav);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
       await new Promise<void>((resolve) => {
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.onend = () => resolve();
-        utterance.onerror = () => resolve();
-        window.speechSynthesis.speak(utterance);
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          speechDoneRef.current = null;
+          URL.revokeObjectURL(url);
+          resolve();
+        };
+        speechDoneRef.current = finish;
+        const audio = new Audio(url);
+        htmlAudioRef.current = audio;
+        audio.onended = finish;
+        audio.onerror = finish;
+        audio.play().catch(finish);
       });
       return;
     }
-    if (!wav) return;
-    const binary = atob(wav);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
+    const voices = window.speechSynthesis?.getVoices?.() || [];
+    const chosen = pickSpokenVoice(voices);
+    if (!text || !chosen || generation !== generationRef.current) return;
     await new Promise<void>((resolve) => {
-      const audio = new Audio(url);
-      htmlAudioRef.current = audio;
-      audio.onended = () => {
-        URL.revokeObjectURL(url);
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        speechDoneRef.current = null;
         resolve();
       };
-      audio.onerror = () => resolve();
-      audio.play().catch(() => resolve());
+      speechDoneRef.current = finish;
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.voice = chosen as SpeechSynthesisVoice;
+      utterance.onend = finish;
+      utterance.onerror = finish;
+      window.speechSynthesis.speak(utterance);
     });
+  };
+
+  const drainSpeech = async () => {
+    if (drainingRef.current) return;
+    drainingRef.current = true;
+    const generation = generationRef.current;
+    while (sentenceQueueRef.current.length && generation === generationRef.current) {
+      const next = sentenceQueueRef.current.shift();
+      if (!next) break;
+      await speakReply(next.text, next.wav);
+    }
+    drainingRef.current = false;
+    if (generation === generationRef.current && aliveRef.current) setPhase('listening');
+  };
+
+  const enqueueSpeech = (text: string, wav: string) => {
+    sentenceQueueRef.current.push({ text, wav });
+    void drainSpeech();
   };
 
   const sendUtterance = async (wavB64: string) => {
     if (!aliveRef.current) return;
     setPhase(nextPhase(phaseRef.current, 'user_end').phase);
+    const payload = {
+      audio_base64: wavB64,
+      provider,
+      private: privateCall,
+      eli5,
+      world_id: worldId,
+      messages: linesRef.current.map((line) => ({ role: line.role, content: line.text })),
+    };
     try {
-      const turn = await sendVoiceTurn({
-        audio_base64: wavB64,
-        provider,
-        private: privateCall,
-        eli5,
-        world_id: worldId,
-        messages: linesRef.current.map((line) => ({ role: line.role, content: line.text })),
-      });
-      if (!aliveRef.current) return;
-      if (turn.needs_credits) setOpenaiNeedsCredits(true);
-      if (turn.transcript) remember({ role: 'user', text: turn.transcript });
-      if (turn.content) {
-        remember({
-          role: 'assistant',
-          text: turn.content,
-          model: turn.model,
-          label: turn.label,
-          note: turn.note,
-        });
+      const response = await openVoiceStream(payload);
+      if (!response.ok || !response.body) throw new Error('The call could not answer.');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = '';
+      let assistant = '';
+      while (aliveRef.current) {
+        const read = await reader.read();
+        if (read.done) break;
+        pending += decoder.decode(read.value, { stream: true });
+        const parsed = parseSseChunk(pending);
+        pending = parsed.rest;
+        for (const item of parsed.events) {
+          const data = JSON.parse(item.data);
+          if (item.event === 'transcript' && data.text) {
+            remember({ role: 'user', text: data.text });
+          } else if (item.event === 'sentence' && data.text) {
+            assistant = assistant ? `${assistant} ${data.text}` : data.text;
+            remember({
+              role: 'assistant',
+              text: assistant,
+              model: modelRef.current,
+              label: whoPays(provider),
+            }, true, false);
+            enqueueSpeech(data.text, data.audio_base64 || '');
+          } else if (item.event === 'done') {
+            if (data.needs_credits) setOpenaiNeedsCredits(true);
+            if (data.content) {
+              remember({
+                role: 'assistant',
+                text: data.content,
+                model: data.model,
+                label: data.label,
+                note: data.note,
+              }, true, true);
+            }
+          }
+        }
       }
-      await speakReply(turn.content, turn.audio_base64);
-      if (aliveRef.current) setPhase('listening');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'The call could not answer.');
       setPhase('listening');
@@ -232,53 +359,49 @@ export function VoiceCall({
   };
 
   const watchMic = async (plan: VoicePlan) => {
+    void plan;
+    if (micReadyRef.current) return;
+    micReadyRef.current = true;
     if (!navigator.mediaDevices?.getUserMedia) {
       setError('The microphone is blocked. You can still try a practice line.');
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
       if (!aliveRef.current) {
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
       streamRef.current = stream;
-      const context = new AudioContext();
+      let context: AudioContext;
+      try {
+        context = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+      } catch {
+        context = new AudioContext();
+      }
       audioRef.current = context;
       const source = context.createMediaStreamSource(stream);
-      const processor = context.createScriptProcessor(4096, 1, 1);
-      source.connect(processor);
-      const sink = context.createGain();
-      sink.gain.value = 0;
-      processor.connect(sink);
-      sink.connect(context.destination);
       let vad = emptyVad();
       let chunks: Float32Array[] = [];
-      processor.onaudioprocess = (event) => {
+      const onSamples = (input: Float32Array) => {
         if (!aliveRef.current || mutedRef.current) return;
-        const input = event.inputBuffer.getChannelData(0);
-        if (plan.mode === 'realtime') {
-          if (wsRef.current?.readyState !== WebSocket.OPEN) return;
-          const pcm = new Int16Array(input.length);
-          for (let index = 0; index < input.length; index += 1) {
-            const sample = Math.max(-1, Math.min(1, input[index]));
-            pcm[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+        const samples = resampleLinear(input, context.sampleRate, TARGET_SAMPLE_RATE);
+        if (modeRef.current === 'realtime') {
+          const pcm = floatToPcm16(samples);
+          const socket = wsRef.current;
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            earlyPcmRef.current.forEach((chunk) => socket.send(chunk));
+            earlyPcmRef.current = [];
+            socket.send(pcm);
+          } else {
+            earlyPcmRef.current.push(pcm);
           }
-          const bytes = new Uint8Array(pcm.buffer);
-          let binary = '';
-          for (let index = 0; index < bytes.length; index += 4096) {
-            binary += String.fromCharCode(...bytes.subarray(index, index + 4096));
-          }
-          wsRef.current.send(JSON.stringify({
-            type: 'input_audio_buffer.append',
-            audio: btoa(binary),
-          }));
           return;
         }
         let sum = 0;
-        for (let index = 0; index < input.length; index += 1) sum += input[index] * input[index];
-        const rms = Math.sqrt(sum / Math.max(1, input.length));
-        const busy = phaseRef.current === 'speaking' || phaseRef.current === 'thinking';
+        for (let index = 0; index < samples.length; index += 1) sum += samples[index] * samples[index];
+        const rms = Math.sqrt(sum / Math.max(1, samples.length));
+        const busy = phaseRef.current === 'speaking' || phaseRef.current === 'thinking' || drainingRef.current;
         const step = stepVad(vad, rms, performance.now(), busy);
         vad = step.state;
         if (step.bargeIn) {
@@ -286,13 +409,39 @@ export function VoiceCall({
           setPhase('listening');
         }
         if (step.speechStart) chunks = [];
-        if (vad.speaking) chunks.push(new Float32Array(input));
+        if (vad.speaking) chunks.push(samples);
         if (step.speechEnd && chunks.length) {
-          const wav = encodeWav(concatFloats(chunks), context.sampleRate);
+          const wav = encodeWav(concatFloats(chunks), TARGET_SAMPLE_RATE);
           chunks = [];
           void sendUtterance(wav);
         }
       };
+      let usedWorklet = false;
+      if (context.audioWorklet) {
+        try {
+          const blob = new Blob([PCM_WORKLET], { type: 'application/javascript' });
+          const url = URL.createObjectURL(blob);
+          await context.audioWorklet.addModule(url);
+          URL.revokeObjectURL(url);
+          const node = new AudioWorkletNode(context, 'pcm-capture');
+          node.port.onmessage = (event) => onSamples(event.data as Float32Array);
+          source.connect(node);
+          usedWorklet = true;
+        } catch {
+          usedWorklet = false;
+        }
+      }
+      if (!usedWorklet) {
+        const processor = context.createScriptProcessor(2048, 1, 1);
+        source.connect(processor);
+        const sink = context.createGain();
+        sink.gain.value = 0;
+        processor.connect(sink);
+        sink.connect(context.destination);
+        processor.onaudioprocess = (event) => {
+          onSamples(event.inputBuffer.getChannelData(0));
+        };
+      }
     } catch {
       setError('The microphone is blocked. You can still try a practice line.');
     }
@@ -302,29 +451,52 @@ export function VoiceCall({
     try {
       const socket = new WebSocket(plan.url, [plan.protocol]);
       wsRef.current = socket;
+      socket.binaryType = 'arraybuffer';
       socket.onopen = () => {
         connectedRef.current = true;
         startedRef.current = Date.now();
         if (plan.session_update && Object.keys(plan.session_update).length) {
           socket.send(JSON.stringify(plan.session_update));
         }
+        earlyPcmRef.current.forEach((chunk) => socket.send(chunk));
+        earlyPcmRef.current = [];
         setPhase('listening');
-        void watchMic(plan);
       };
       socket.onmessage = (message) => {
-        let event: { type?: string; delta?: string; transcript?: string };
+        if (message.data instanceof ArrayBuffer) {
+          noteFirstAudio();
+          audioDoneRef.current = false;
+          playPcmBuffer(message.data, plan.sample_rate || TARGET_SAMPLE_RATE);
+          return;
+        }
+        let event: { type?: string; delta?: string; transcript?: string; item_id?: string };
         try {
           event = JSON.parse(String(message.data));
         } catch {
           return;
         }
         const parsed = interpretRealtimeEvent(event);
+        if (parsed.itemId) itemIdRef.current = parsed.itemId;
         if (parsed.kind === 'speech_started') {
-          const moved = nextPhase(phaseRef.current, 'user_start');
-          if (moved.bargeIn) stopPlayback();
-          setPhase(moved.phase);
+          bargeRealtime();
+          audioDoneRef.current = false;
+          responseDoneRef.current = false;
+          setPhase('listening');
+        } else if (parsed.kind === 'speech_stopped') {
+          speechStoppedRef.current = performance.now();
+          ttfaLoggedRef.current = false;
+          setPhase('thinking');
         } else if (parsed.kind === 'audio') {
-          playPcm(parsed.text, plan.sample_rate || 24000);
+          noteFirstAudio();
+          const binary = atob(parsed.text);
+          const bytes = new Uint8Array(binary.length);
+          for (let index = 0; index < binary.length; index += 1) {
+            bytes[index] = binary.charCodeAt(index);
+          }
+          playPcmBuffer(bytes.buffer, plan.sample_rate || TARGET_SAMPLE_RATE);
+        } else if (parsed.kind === 'audio_done') {
+          audioDoneRef.current = true;
+          maybeListen();
         } else if (parsed.kind === 'user') {
           remember({ role: 'user', text: parsed.text }, parsed.cumulative, parsed.final);
         } else if (parsed.kind === 'assistant') {
@@ -338,8 +510,9 @@ export function VoiceCall({
             model: plan.model,
             label: whoPays(plan.provider),
           }, previous?.role === 'assistant', parsed.final);
-        } else if (parsed.kind === 'done' && phaseRef.current === 'speaking') {
-          setPhase('listening');
+        } else if (parsed.kind === 'done') {
+          responseDoneRef.current = true;
+          maybeListen();
         }
       };
       socket.onerror = () => {
@@ -349,14 +522,14 @@ export function VoiceCall({
         setUsdPerMinute(0);
         setNote('The live voice line did not connect, so this call stays on this Mac.');
         setPhase('listening');
-        void watchMic({ ...plan, mode: 'local' });
+        void watchMic(plan);
       };
     } catch {
       modeRef.current = 'local';
       setUsdPerMinute(0);
       setNote('The live voice line did not connect, so this call stays on this Mac.');
       setPhase('listening');
-      void watchMic({ ...plan, mode: 'local' });
+      void watchMic(plan);
     }
   };
 
@@ -383,6 +556,7 @@ export function VoiceCall({
       setNote(plan.note || '');
       if (plan.needs_credits) setOpenaiNeedsCredits(true);
       if (plan.mode === 'realtime' && plan.url && plan.protocol) {
+        void watchMic(plan);
         openRealtime(plan);
         return;
       }

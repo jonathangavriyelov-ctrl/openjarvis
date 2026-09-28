@@ -72,6 +72,11 @@ class VoiceTurnRequest(BaseModel):
     messages: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class VoiceMetricRequest(BaseModel):
+    name: str = "ttfa_ms"
+    value: float = 0
+
+
 class VoiceUsageRequest(BaseModel):
     mode: str = "local"
     provider: str = "grok"
@@ -661,6 +666,45 @@ def personal_voice_turn(body: VoiceTurnRequest, request: Request) -> dict[str, A
         caller=getattr(request.app.state, "chat_caller", None),
         transcriber=getattr(request.app.state, "voice_transcriber", None),
     )
+
+
+@personal_router.post("/voice/turn/stream")
+def personal_voice_stream(body: VoiceTurnRequest, request: Request):
+    """Stream sentences so the first one can play while the rest is written."""
+    import base64
+
+    from fastapi.responses import StreamingResponse
+
+    from openjarvis.personal.voice_call import iter_voice_events
+
+    audio = b""
+    if body.audio_base64.strip():
+        try:
+            audio = base64.b64decode(body.audio_base64, validate=False)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400, detail="That audio could not be read."
+            ) from exc
+    events = iter_voice_events(
+        audio=audio,
+        transcript=body.transcript,
+        practice=body.practice,
+        provider=body.provider or "grok",
+        private=body.private,
+        eli5=body.eli5,
+        messages=body.messages,
+        engine=getattr(request.app.state, "engine", None),
+        caller=getattr(request.app.state, "chat_caller", None),
+        transcriber=getattr(request.app.state, "voice_transcriber", None),
+    )
+    return StreamingResponse(events, media_type="text/event-stream")
+
+
+@personal_router.post("/voice/metrics")
+def personal_voice_metrics(body: VoiceMetricRequest) -> dict[str, Any]:
+    """Record a latency number. Audio and keys are not accepted here."""
+    logger.info("voice metric %s=%.1f", body.name[:40], float(body.value))
+    return {"ok": True}
 
 
 @personal_router.post("/voice/usage")

@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
-import base64
 import sys
 
 import pytest
 
 from openjarvis.chat_switch import clear_needs_credits, mark_needs_credits
 from openjarvis.personal.voice_call import (
+    _IDLE_SECONDS,
+    _cache,
+    choose_say_voice,
+    iter_voice_events,
     plan_session,
+    release_idle_models,
     run_local_turn,
-    tone_wav_b64,
+    take_sentences,
     transcribe_locally,
     voice_cost,
 )
@@ -23,8 +27,16 @@ def _quiet_voice(monkeypatch):
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _cache.whisper = None
+    _cache.whisper_used = 0.0
+    _cache.kokoro = None
+    _cache.kokoro_used = 0.0
+    _cache.kokoro_unavailable = False
     clear_needs_credits()
     yield
+    _cache.whisper = None
+    _cache.kokoro = None
+    _cache.kokoro_unavailable = False
     clear_needs_credits()
 
 
@@ -156,8 +168,8 @@ def test_local_turn_uses_the_transcriber_and_the_selected_brain(monkeypatch):
     assert result["transcript"] == "What time is it?"
     assert "claude" in result["content"]
     assert result["usd"] == 0
-    wav = base64.b64decode(result["audio_base64"])
-    assert wav.startswith(b"RIFF")
+    assert result["audio_kind"] == "none"
+    assert result["audio_base64"] == ""
 
 
 def test_stub_turn_is_canned_and_does_not_call_the_brain(monkeypatch):
@@ -171,7 +183,8 @@ def test_stub_turn_is_canned_and_does_not_call_the_brain(monkeypatch):
     assert called == []
     assert result["transcript"] == "Hello Jarvis."
     assert result["content"] == "Grok answered."
-    assert base64.b64decode(result["audio_base64"]).startswith(b"RIFF")
+    assert result["audio_base64"] == ""
+    assert result["audio_kind"] == "none"
 
 
 def test_practice_without_the_stub_asks_the_brain():
@@ -195,7 +208,6 @@ def test_voice_cost_bills_realtime_minutes_only():
     assert voice_cost("realtime", "openai", 60) == pytest.approx(0.30)
     assert voice_cost("local", "grok", 60) == 0
     assert voice_cost("realtime", "grok", 0) == 0
-    assert tone_wav_b64().startswith("UklGR")
 
 
 def test_voice_routes_stay_behind_the_password(tmp_path, monkeypatch):
@@ -221,6 +233,16 @@ def test_voice_routes_stay_behind_the_password(tmp_path, monkeypatch):
             "/v1/personal/voice/session", json={"provider": "grok"}
         )
         assert denied.status_code == 401
+        denied_stream = client.post(
+            "/v1/personal/voice/turn/stream",
+            json={"practice": True, "provider": "grok"},
+        )
+        assert denied_stream.status_code == 401
+        denied_metric = client.post(
+            "/v1/personal/voice/metrics",
+            json={"name": "ttfa_ms", "value": 12},
+        )
+        assert denied_metric.status_code == 401
         setup = client.post(
             "/v1/personal/auth/setup",
             json={"password": "correct-horse"},
@@ -251,6 +273,19 @@ def test_voice_routes_stay_behind_the_password(tmp_path, monkeypatch):
         assert turn.status_code == 200, turn.text
         assert turn.json()["transcript"] == "Hello Jarvis."
         assert "Grok answered." in turn.json()["content"]
+        stream = client.post(
+            "/v1/personal/voice/turn/stream",
+            json={"practice": True, "provider": "grok"},
+        )
+        assert stream.status_code == 200, stream.text
+        assert "event: sentence" in stream.text
+        assert "Grok answered." in stream.text
+        metric = client.post(
+            "/v1/personal/voice/metrics",
+            json={"name": "ttfa_ms", "value": 12},
+        )
+        assert metric.status_code == 200
+        assert metric.json()["ok"] is True
     finally:
         office.close()
 
@@ -308,3 +343,133 @@ def test_usage_lands_in_the_cost_report(tmp_path, monkeypatch):
         assert worlds[world_id]["voice"] == pytest.approx(0.05)
     finally:
         office.close()
+
+
+def test_session_payload_is_fast_natural_and_private(tmp_path, monkeypatch):
+    home = tmp_path / "notes"
+    home.mkdir()
+    (home / "USER.md").write_text(
+        "# Ada Lovelace\nName: Jonathan\nxai-live-secret-value\n"
+    )
+    (home / "SOUL.md").write_text("Be brief and kind.")
+    (home / "MEMORY.md").write_text("detail " * 2000)
+    monkeypatch.setenv("OPENJARVIS_HOME", str(home))
+    monkeypatch.setenv("XAI_API_KEY", "xai-live-secret-value")
+    monkeypatch.setenv("OPENJARVIS_XAI_VOICE", "eve")
+    plan = plan_session("grok", overall_cap=80, mint=_mint)
+    session = plan["session_update"]["session"]
+    assert plan["sample_rate"] == 24000
+    assert plan["audio_transport"] == "binary"
+    assert session["voice"] == "eve"
+    assert session["reasoning"] == {"effort": "none"}
+    assert session["turn_detection"]["type"] == "server_vad"
+    assert session["turn_detection"]["silence_duration_ms"] == 450
+    assert session["turn_detection"]["prefix_padding_ms"] == 300
+    audio = session["audio"]
+    assert audio["input"]["format"]["rate"] == 24000
+    assert audio["input"]["transport"] == "binary"
+    assert audio["output"]["transport"] == "binary"
+    transcription = audio["input"]["transcription"]
+    assert transcription["language_hint"] == "en"
+    assert transcription["model"] == "grok-transcribe"
+    assert "Jarvis" in transcription["keyterms"]
+    assert "Claude" in transcription["keyterms"]
+    assert "Ada Lovelace" in transcription["keyterms"]
+    instructions = session["instructions"]
+    assert "contractions" in instructions
+    assert "Ada Lovelace" in instructions
+    assert "Be brief and kind." in instructions
+    assert len(instructions) <= 3000
+    assert "xai-live-secret-value" not in instructions
+    assert "xai-live-secret-value" not in str(plan)
+
+
+def test_take_sentences_keeps_decimals_whole():
+    ready, rest = take_sentences("The rate is 3.14 today. Next bit")
+    assert ready == ["The rate is 3.14 today."]
+    assert rest.strip() == "Next bit"
+    ready, rest = take_sentences("Still talking", final=True)
+    assert ready == ["Still talking"]
+    assert rest == ""
+
+
+def test_say_voice_prefers_a_natural_installed_voice():
+    listing = "Fred en_US\nSamantha en_US\n"
+    assert choose_say_voice(listing) == "Samantha"
+    assert choose_say_voice("") == ""
+
+
+def test_stream_emits_sentences_before_the_reply_is_finished():
+    events = list(
+        iter_voice_events(
+            transcript="Hi",
+            provider="local",
+            caller=lambda provider, model: "First sentence. Second one.",
+        )
+    )
+    body = "".join(events)
+    assert "event: transcript" in body
+    assert body.index("event: sentence") < body.index("event: done")
+    assert "First sentence." in body
+    assert "Second one." in body
+
+
+def test_whisper_stays_warm_with_greedy_english_settings(monkeypatch):
+    created: list[dict] = []
+    seen: list[dict] = []
+
+    class _Segment:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class WhisperModel:
+        def __init__(self, size, device="cpu", compute_type="int8", cpu_threads=4):
+            created.append(
+                {
+                    "size": size,
+                    "device": device,
+                    "compute_type": compute_type,
+                    "cpu_threads": cpu_threads,
+                }
+            )
+
+        def transcribe(self, path, **kwargs):
+            del path
+            seen.append(kwargs)
+            return [_Segment("Claude")], None
+
+    module = type(sys)("faster_whisper")
+    module.WhisperModel = WhisperModel
+    monkeypatch.setitem(sys.modules, "faster_whisper", module)
+    monkeypatch.setitem(sys.modules, "mlx_whisper", None)
+    assert transcribe_locally(b"RIFFwav") == "Claude"
+    assert transcribe_locally(b"RIFFwav") == "Claude"
+    assert len(created) == 1
+    assert created[0] == {
+        "size": "small",
+        "device": "cpu",
+        "compute_type": "int8",
+        "cpu_threads": 4,
+    }
+    assert seen[0]["beam_size"] == 1
+    assert seen[0]["language"] == "en"
+    assert seen[0]["condition_on_previous_text"] is False
+    assert "Claude" in seen[0]["hotwords"]
+    release_idle_models(now=_cache.whisper_used + 10)
+    assert _cache.whisper is not None
+    release_idle_models(now=_cache.whisper_used + _IDLE_SECONDS)
+    assert _cache.whisper is None
+
+
+def test_kokoro_unloads_after_it_sits_idle():
+    closed: list[bool] = []
+
+    class _Backend:
+        def close(self) -> None:
+            closed.append(True)
+
+    _cache.kokoro = _Backend()
+    _cache.kokoro_used = 0
+    release_idle_models(now=_IDLE_SECONDS)
+    assert _cache.kokoro is None
+    assert closed == [True]

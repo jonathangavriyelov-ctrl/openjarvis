@@ -9,12 +9,16 @@ Mac voice. The long-lived API key never leaves the server.
 from __future__ import annotations
 
 import base64
-import io
-import math
+import json
+import logging
 import os
-import struct
-import wave
-from typing import Any, Callable
+import re
+import shutil
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+from typing import Any, Callable, Iterator
 
 import httpx
 
@@ -46,10 +50,44 @@ BUDGET_NOTE = (
 )
 CLAUDE_NOTE = "Listening on this Mac. Claude writes the answer."
 LOCAL_NOTE = "Listening on this Mac."
-JARVIS_INSTRUCTIONS = (
-    "You are Jarvis, Jonathan's assistant. Answer out loud in short, "
-    "clear sentences. Wait to be interrupted."
+VOICE_PERSONA = (
+    "You are Jarvis, talking with Jonathan out loud. "
+    "Sound conversational. Use contractions. "
+    "Answer in one or two sentences. "
+    "No lists, no markdown, no stage directions. "
+    "He may interrupt you. Stop as soon as he starts talking."
 )
+_INSTRUCTION_CAP = 3000
+_IDLE_SECONDS = 300
+_SAY_PREFERENCE = ("Samantha", "Ava", "Allison", "Zoe", "Daniel", "Karen")
+_BASE_KEYTERMS = (
+    "Jarvis",
+    "Jonathan",
+    "Gavriyelov",
+    "Claude",
+    "Grok",
+    "Anthropic",
+    "xAI",
+    "OpenJarvis",
+    "Quick Funders",
+    "Gavco",
+    "Glatt Express",
+)
+logger = logging.getLogger(__name__)
+
+
+class _ModelCache:
+    """One warm speech model. Dropped after five idle minutes."""
+
+    def __init__(self) -> None:
+        self.whisper: Any = None
+        self.whisper_used = 0.0
+        self.kokoro: Any = None
+        self.kokoro_used = 0.0
+        self.kokoro_unavailable = False
+
+
+_cache = _ModelCache()
 
 Mint = Callable[[str], dict[str, Any]]
 Transcriber = Callable[[bytes], str]
@@ -137,20 +175,100 @@ def _scrub(payload: dict[str, Any]) -> dict[str, Any]:
     return json.loads(text)
 
 
+def _without_secrets(text: str) -> str:
+    cleaned = text
+    for secret in (_live_key("grok"), _live_key("openai"), _live_key("claude")):
+        if secret and len(secret) > 6:
+            cleaned = cleaned.replace(secret, "")
+    return cleaned
+
+
+def _note_files() -> list[Path]:
+    from openjarvis.core.paths import get_config_dir
+
+    home = get_config_dir()
+    return [home / name for name in ("USER.md", "SOUL.md", "MEMORY.md")]
+
+
+def names_from_notes(text: str) -> list[str]:
+    """Headings and ``Name:`` lines from a personal note."""
+    found: list[str] = []
+    pattern = re.compile(r"(?m)^#+\s+(.+)$|^(?:Name|name):\s*(.+)$")
+    for match in pattern.finditer(text or ""):
+        value = (match.group(1) or match.group(2) or "").strip()
+        value = _without_secrets(value)[:50].strip()
+        if value and value not in found:
+            found.append(value)
+    return found
+
+
+def keyterms() -> list[str]:
+    """Names the transcriber should not mis-hear."""
+    terms = list(_BASE_KEYTERMS)
+    for path in _note_files():
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for name in names_from_notes(text):
+            if name not in terms:
+                terms.append(name)
+    return terms[:100]
+
+
+def voice_instructions() -> str:
+    """Short spoken persona plus a trimmed excerpt of the desk notes."""
+    parts = [VOICE_PERSONA, ""]
+    for path in _note_files():
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if text:
+            parts.append(f"{path.name}:\n{_without_secrets(text)}")
+    body = "\n".join(parts).strip()
+    if len(body) <= _INSTRUCTION_CAP:
+        return body
+    trimmed = body[:_INSTRUCTION_CAP].rsplit(" ", 1)[0].strip()
+    return trimmed or body[:_INSTRUCTION_CAP]
+
+
+def xai_voice_name() -> str:
+    """Built-in Grok voice. ``eve`` is the documented natural default."""
+    return os.environ.get("OPENJARVIS_XAI_VOICE", "eve").strip() or "eve"
+
+
 def _session_update(model: str) -> dict[str, Any]:
     return {
         "type": "session.update",
         "session": {
             "model": model,
-            "voice": "eve",
-            "instructions": JARVIS_INSTRUCTIONS,
-            "turn_detection": {"type": "server_vad"},
+            "voice": xai_voice_name(),
+            "instructions": voice_instructions(),
+            "reasoning": {"effort": "none"},
+            "turn_detection": {
+                "type": "server_vad",
+                "silence_duration_ms": 450,
+                "prefix_padding_ms": 300,
+            },
             "audio": {
                 "input": {
                     "format": {"type": "audio/pcm", "rate": _SAMPLE_RATE},
-                    "transcription": {"model": "grok-transcribe"},
+                    "transport": "binary",
+                    "transcription": {
+                        "model": "grok-transcribe",
+                        "language_hint": "en",
+                        "keyterms": keyterms(),
+                    },
                 },
-                "output": {"format": {"type": "audio/pcm", "rate": _SAMPLE_RATE}},
+                "output": {
+                    "format": {"type": "audio/pcm", "rate": _SAMPLE_RATE},
+                    "transport": "binary",
+                },
             },
         },
     }
@@ -176,6 +294,7 @@ def _local_plan(
         "note": note,
         "needs_credits": needs_credits,
         "sample_rate": _SAMPLE_RATE,
+        "audio_transport": "json",
         "session_update": {},
     }
 
@@ -271,6 +390,7 @@ def plan_session(
         "note": note,
         "needs_credits": needs_credits,
         "sample_rate": _SAMPLE_RATE,
+        "audio_transport": "binary",
         "session_update": _session_update(model),
     }
     return _scrub(plan)
@@ -310,26 +430,22 @@ def mint_client_secret(provider: str) -> dict[str, Any]:
     return {"value": str(value), "expires_at": int(data.get("expires_at") or 0)}
 
 
-def tone_wav_b64(seconds: float = 1.2, frequency: float = 440.0) -> str:
-    """A tiny valid WAV so the browser can play something without a voice."""
-    rate = _SAMPLE_RATE
-    count = max(1, int(rate * seconds))
-    frames = bytearray()
-    for index in range(count):
-        sample = int(0.2 * 32767 * math.sin(2 * math.pi * frequency * index / rate))
-        frames += struct.pack("<h", sample)
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as handle:
-        handle.setnchannels(1)
-        handle.setsampwidth(2)
-        handle.setframerate(rate)
-        handle.writeframes(bytes(frames))
-    return base64.b64encode(buffer.getvalue()).decode("ascii")
+def release_idle_models(now: float | None = None) -> None:
+    """Drop speech models that have sat unused for five minutes."""
+    moment = time.monotonic() if now is None else now
+    if _cache.whisper is not None and moment - _cache.whisper_used >= _IDLE_SECONDS:
+        _cache.whisper = None
+    if _cache.kokoro is not None and moment - _cache.kokoro_used >= _IDLE_SECONDS:
+        closer = getattr(_cache.kokoro, "close", None)
+        if callable(closer):
+            try:
+                closer()
+            except Exception:
+                pass
+        _cache.kokoro = None
 
 
 def _temp_audio(audio: bytes) -> str:
-    import tempfile
-
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
         handle.write(audio)
         return handle.name
@@ -340,8 +456,12 @@ def _drop(path: str) -> None:
         os.unlink(path)
 
 
+def _prompt_terms() -> str:
+    return ", ".join(keyterms())
+
+
 def transcribe_locally(audio: bytes) -> str:
-    """Hear a wav with mlx-whisper, then faster-whisper. Both are optional."""
+    """Hear a wav with mlx-whisper when installed, else a warm faster-whisper."""
     if not audio:
         return ""
     heard = _transcribe_mlx(audio)
@@ -356,11 +476,20 @@ def _transcribe_mlx(audio: bytes) -> str:
     except ImportError:
         return ""
     path = _temp_audio(audio)
+    repo = os.environ.get(
+        "OPENJARVIS_MLX_WHISPER", "mlx-community/whisper-small-mlx"
+    )
+    prompt = _prompt_terms()
     try:
-        result = mlx_whisper.transcribe(
-            path,
-            path_or_hf_repo="mlx-community/whisper-base-mlx",
-        )
+        try:
+            result = mlx_whisper.transcribe(
+                path,
+                path_or_hf_repo=repo,
+                language="en",
+                initial_prompt=prompt,
+            )
+        except TypeError:
+            result = mlx_whisper.transcribe(path, path_or_hf_repo=repo)
         if isinstance(result, dict):
             return str(result.get("text") or "").strip()
         return str(result or "").strip()
@@ -370,20 +499,164 @@ def _transcribe_mlx(audio: bytes) -> str:
         _drop(path)
 
 
+def _load_whisper() -> Any:
+    release_idle_models()
+    if _cache.whisper is not None:
+        _cache.whisper_used = time.monotonic()
+        return _cache.whisper
+    from faster_whisper import WhisperModel
+
+    size = os.environ.get("OPENJARVIS_WHISPER_SIZE", "small")
+    _cache.whisper = WhisperModel(
+        size,
+        device="cpu",
+        compute_type="int8",
+        cpu_threads=4,
+    )
+    _cache.whisper_used = time.monotonic()
+    return _cache.whisper
+
+
+def _read_segments(model: Any, path: str) -> str:
+    prompt = _prompt_terms()
+    kwargs = {
+        "beam_size": 1,
+        "language": "en",
+        "condition_on_previous_text": False,
+        "initial_prompt": prompt,
+        "hotwords": prompt,
+    }
+    try:
+        segments, _info = model.transcribe(path, **kwargs)
+    except TypeError:
+        kwargs.pop("hotwords", None)
+        segments, _info = model.transcribe(path, **kwargs)
+    return " ".join(segment.text.strip() for segment in segments).strip()
+
+
 def _transcribe_faster(audio: bytes) -> str:
     try:
         from faster_whisper import WhisperModel
     except ImportError:
         return ""
+    del WhisperModel
     path = _temp_audio(audio)
     try:
-        model = WhisperModel("base", device="cpu", compute_type="int8")
-        segments, _info = model.transcribe(path)
-        return " ".join(segment.text.strip() for segment in segments).strip()
+        model = _load_whisper()
+        _cache.whisper_used = time.monotonic()
+        return _read_segments(model, path)
     except Exception:
+        logger.debug("faster-whisper did not hear the utterance", exc_info=True)
         return ""
     finally:
         _drop(path)
+
+
+def take_sentences(text: str, *, final: bool = False) -> tuple[list[str], str]:
+    """Split spoken text on sentence ends. Leave decimals such as 3.14 whole."""
+    ready: list[str] = []
+    start = 0
+    pattern = re.compile(r"(?<!\d)[.!?][\"']?(?=\s|$)")
+    for match in pattern.finditer(text or ""):
+        piece = text[start : match.end()].strip()
+        if piece:
+            ready.append(piece)
+        start = match.end()
+    rest = text[start:]
+    if final and rest.strip():
+        ready.append(rest.strip())
+        rest = ""
+    return ready, rest
+
+
+def choose_say_voice(listing: str) -> str:
+    """Pick the most natural installed macOS voice from ``say -v '?'``."""
+    names: list[str] = []
+    for line in (listing or "").splitlines():
+        bits = line.split()
+        if bits:
+            names.append(bits[0])
+    for preferred in _SAY_PREFERENCE:
+        for name in names:
+            if name == preferred or name.startswith(preferred):
+                return name
+    return names[0] if names else ""
+
+
+def _say_wav(text: str) -> bytes:
+    if not text.strip() or shutil.which("say") is None:
+        return b""
+    listing = ""
+    try:
+        listed = subprocess.run(
+            ["say", "-v", "?"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        listing = listed.stdout or ""
+    except Exception:
+        listing = ""
+    voice = choose_say_voice(listing)
+    path = ""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+            path = handle.name
+        command = ["say"]
+        if voice:
+            command.extend(["-v", voice])
+        command.extend(["-o", path, "--data-format=LEI16@24000", text])
+        subprocess.run(command, check=False, capture_output=True, timeout=20)
+        data = Path(path).read_bytes() if os.path.exists(path) else b""
+        return data if data.startswith(b"RIFF") else b""
+    except Exception:
+        return b""
+    finally:
+        _drop(path)
+
+
+def _kokoro_wav(text: str) -> bytes:
+    release_idle_models()
+    if _cache.kokoro_unavailable:
+        return b""
+    if _cache.kokoro is None:
+        try:
+            from openjarvis.speech.kokoro_tts import KokoroTTSBackend
+        except ImportError:
+            _cache.kokoro_unavailable = True
+            return b""
+        backend = KokoroTTSBackend()
+        try:
+            if not backend.health():
+                _cache.kokoro_unavailable = True
+                return b""
+        except Exception:
+            _cache.kokoro_unavailable = True
+            return b""
+        _cache.kokoro = backend
+    _cache.kokoro_used = time.monotonic()
+    voice = os.environ.get("OPENJARVIS_KOKORO_VOICE", "af_heart").strip() or "af_heart"
+    try:
+        result = _cache.kokoro.synthesize(text, voice_id=voice)
+    except Exception:
+        logger.debug("Kokoro did not speak", exc_info=True)
+        return b""
+    return getattr(result, "audio", b"") or b""
+
+
+def synthesize_speech(text: str) -> tuple[bytes, str]:
+    """Kokoro when the extra is installed, then macOS ``say``, else nothing."""
+    spoken = text.strip()
+    if not spoken:
+        return b"", "none"
+    wav = _kokoro_wav(spoken)
+    if wav:
+        return wav, "speech"
+    wav = _say_wav(spoken)
+    if wav:
+        return wav, "say"
+    return b"", "none"
 
 
 def run_local_turn(
@@ -411,7 +684,7 @@ def run_local_turn(
             "note": "",
             "needs_credits": False,
         }
-        return _scrub(_turn_payload(heard, reply))
+        return _scrub(_turn_payload(heard, reply, audio=b"", kind="none"))
 
     heard = transcript.strip()
     if practice and not heard:
@@ -427,7 +700,7 @@ def run_local_turn(
             "note": "",
             "needs_credits": False,
         }
-        return _scrub(_turn_payload("", empty, audio_b64=""))
+        return _scrub(_turn_payload("", empty, audio=b"", kind="none"))
     history = []
     for item in messages or []:
         if not isinstance(item, dict):
@@ -446,16 +719,18 @@ def run_local_turn(
         engine=engine,
         caller=caller,
     )
-    return _scrub(_turn_payload(heard, reply))
+    audio, kind = synthesize_speech(str(reply.get("content") or ""))
+    return _scrub(_turn_payload(heard, reply, audio=audio, kind=kind))
 
 
 def _turn_payload(
     heard: str,
     reply: dict[str, Any],
     *,
-    audio_b64: str | None = None,
+    audio: bytes = b"",
+    kind: str = "none",
 ) -> dict[str, Any]:
-    spoken = audio_b64 if audio_b64 is not None else tone_wav_b64()
+    encoded = base64.b64encode(audio).decode("ascii") if audio else ""
     return {
         "transcript": heard,
         "content": str(reply.get("content") or ""),
@@ -464,8 +739,256 @@ def _turn_payload(
         "label": str(reply.get("label") or ""),
         "note": str(reply.get("note") or ""),
         "needs_credits": bool(reply.get("needs_credits")),
-        "audio_base64": spoken,
-        "audio_kind": "tone" if spoken else "none",
+        "audio_base64": encoded,
+        "audio_kind": kind if encoded else "none",
         "sample_rate": _SAMPLE_RATE,
         "usd": 0.0,
     }
+
+
+def _iter_cloud_deltas(
+    provider: str, model: str, messages: list[dict[str, str]]
+) -> Iterator[str]:
+    """Stream one provider. Raise AttemptFailed so the caller can fall back."""
+    from openjarvis.chat_switch import PROVIDERS, AttemptFailed
+
+    spec = PROVIDERS[provider]
+    key = os.environ.get(str(spec["env"])) or ""
+    if not key:
+        raise AttemptFailed("Not connected.")
+    if provider == "claude":
+        stream_cm = httpx.stream(
+            "POST",
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": 220,
+                "stream": True,
+                "messages": [
+                    item for item in messages if item.get("role") != "system"
+                ],
+            },
+            timeout=45.0,
+        )
+    else:
+        payload: dict[str, Any] = {
+            "model": model,
+            "max_tokens": 220,
+            "stream": True,
+            "messages": messages,
+        }
+        if model.startswith("gpt-6"):
+            payload["reasoning_effort"] = "none"
+        base = (
+            "https://api.x.ai/v1" if provider == "grok" else "https://api.openai.com/v1"
+        )
+        stream_cm = httpx.stream(
+            "POST",
+            f"{base}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {key}",
+                "content-type": "application/json",
+            },
+            json=payload,
+            timeout=45.0,
+        )
+    with stream_cm as stream:
+        stream.raise_for_status()
+        for line in stream.iter_lines():
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                event = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if provider == "claude":
+                if event.get("type") != "content_block_delta":
+                    continue
+                delta = (event.get("delta") or {}).get("text") or ""
+            else:
+                choices = event.get("choices") or []
+                delta = ""
+                if choices:
+                    delta = ((choices[0] or {}).get("delta") or {}).get("content") or ""
+            if delta:
+                yield str(delta)
+
+
+def iter_answer_deltas(
+    messages: list[dict[str, str]],
+    provider: str,
+    *,
+    private: bool = False,
+    eli5: bool = False,
+    engine: Any = None,
+    caller: Any = None,
+) -> tuple[dict[str, Any], Iterator[str]]:
+    """Reply metadata plus text deltas. A stub never calls a live provider."""
+    choice = "local" if private else normalize_choice(provider)
+    if os.environ.get("OPENJARVIS_VOICE_STUB") == "1":
+        reply = {
+            "content": f"{label_for(choice, eli5=eli5)} answered.",
+            "provider": choice,
+            "model": model_for(choice),
+            "label": label_for(choice, eli5=eli5),
+            "note": "",
+            "needs_credits": False,
+        }
+
+        def _canned() -> Iterator[str]:
+            yield str(reply["content"])
+
+        return reply, _canned()
+    if caller is not None or os.environ.get("OPENJARVIS_CHAT_STUB") == "1":
+        reply = answer_chat(
+            messages,
+            choice,
+            private=private,
+            eli5=eli5,
+            engine=engine,
+            caller=caller,
+        )
+
+        def _whole() -> Iterator[str]:
+            text = str(reply.get("content") or "")
+            if text:
+                yield text
+
+        return reply, _whole()
+    from openjarvis.chat_switch import attempt_order
+
+    order = attempt_order(choice, private=private)
+    first = order[0] if order else "local"
+
+    def _deltas() -> Iterator[str]:
+        if first != "local":
+            try:
+                yield from _iter_cloud_deltas(first, model_for(first), messages)
+                return
+            except Exception:
+                logger.debug("voice stream fell back", exc_info=True)
+        reply_now = answer_chat(
+            messages,
+            choice,
+            private=private,
+            eli5=eli5,
+            engine=engine,
+        )
+        text = str(reply_now.get("content") or "")
+        if text:
+            yield text
+
+    meta = {
+        "content": "",
+        "provider": first,
+        "model": model_for(first),
+        "label": label_for(first, eli5=eli5),
+        "note": "",
+        "needs_credits": False,
+    }
+    return meta, _deltas()
+
+
+def iter_voice_events(
+    *,
+    audio: bytes = b"",
+    transcript: str = "",
+    practice: bool = False,
+    provider: str = "grok",
+    private: bool = False,
+    eli5: bool = False,
+    messages: list[dict[str, Any]] | None = None,
+    engine: Any = None,
+    caller: Any = None,
+    transcriber: Transcriber | None = None,
+) -> Iterator[str]:
+    """SSE events: transcript, one sentence at a time, then done."""
+    choice = "local" if private else normalize_choice(provider)
+    stub = os.environ.get("OPENJARVIS_VOICE_STUB") == "1"
+    if stub or (practice and not transcript.strip()):
+        heard = "Hello Jarvis."
+    else:
+        heard = transcript.strip()
+    if not heard and audio:
+        heard = (transcriber or transcribe_locally)(audio).strip()
+    if not heard:
+        empty = {
+            "content": "I could not hear that.",
+            "provider": choice,
+            "model": model_for(choice),
+            "label": label_for(choice, eli5=eli5),
+            "note": "",
+            "needs_credits": False,
+        }
+        yield _sse("done", _turn_payload("", empty, audio=b"", kind="none"))
+        return
+    history = []
+    for item in messages or []:
+        if isinstance(item, dict) and str(item.get("content") or "").strip():
+            history.append(
+                {
+                    "role": str(item.get("role") or "user"),
+                    "content": str(item.get("content")).strip(),
+                }
+            )
+    history.append({"role": "user", "content": heard})
+    reply, deltas = iter_answer_deltas(
+        history[-12:],
+        choice,
+        private=private,
+        eli5=eli5,
+        engine=engine,
+        caller=caller,
+    )
+    yield _sse("transcript", {"text": heard})
+    buffer = ""
+    spoken: list[str] = []
+    for delta in deltas:
+        buffer += delta
+        ready, buffer = take_sentences(buffer)
+        for sentence in ready:
+            spoken.append(sentence)
+            yield _sse("sentence", _sentence_event(sentence, stub=stub))
+    if buffer.strip():
+        spoken.append(buffer.strip())
+        yield _sse("sentence", _sentence_event(buffer.strip(), stub=stub))
+    reply = dict(reply)
+    reply["content"] = " ".join(spoken)
+    yield _sse(
+        "done",
+        {
+            "transcript": heard,
+            "content": reply["content"],
+            "provider": reply.get("provider") or "",
+            "model": reply.get("model") or "",
+            "label": reply.get("label") or "",
+            "note": reply.get("note") or "",
+            "needs_credits": bool(reply.get("needs_credits")),
+        },
+    )
+
+
+def _sentence_event(sentence: str, *, stub: bool) -> dict[str, Any]:
+    if stub:
+        audio, kind = b"", "none"
+    else:
+        audio, kind = synthesize_speech(sentence)
+    encoded = base64.b64encode(audio).decode("ascii") if audio else ""
+    return {
+        "text": sentence,
+        "audio_base64": encoded,
+        "audio_kind": kind if encoded else "none",
+        "sample_rate": _SAMPLE_RATE,
+    }
+
+
+def _sse(event: str, payload: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(_scrub(payload))}\n\n"

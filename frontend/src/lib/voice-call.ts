@@ -24,16 +24,29 @@ export interface VadState {
   speaking: boolean;
   aboveSince: number | null;
   belowSince: number | null;
+  noise: number;
 }
 
 export const SPEECH_RMS = 0.04;
 export const SPEECH_START_MS = 150;
-export const SPEECH_END_MS = 700;
+export const SPEECH_END_MS = 480;
+export const TARGET_SAMPLE_RATE = 24000;
+export const CHUNK_MS = 60;
+
+export const MIC_CONSTRAINTS: MediaStreamConstraints = {
+  audio: {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+    channelCount: 1,
+  },
+};
 
 export const emptyVad = (): VadState => ({
   speaking: false,
   aboveSince: null,
   belowSince: null,
+  noise: 0.01,
 });
 
 export function nextPhase(
@@ -75,8 +88,10 @@ export function stepVad(
   now: number,
   assistantBusy: boolean,
 ): { state: VadState; speechStart: boolean; speechEnd: boolean; bargeIn: boolean } {
-  const hot = rms >= SPEECH_RMS;
-  const next: VadState = { ...state };
+  const threshold = Math.max(SPEECH_RMS, state.noise * 3);
+  const hot = rms >= threshold;
+  const noise = hot ? state.noise : state.noise * 0.9 + rms * 0.1;
+  const next: VadState = { ...state, noise };
   let speechStart = false;
   let speechEnd = false;
   let bargeIn = false;
@@ -102,40 +117,65 @@ export function stepVad(
   return { state: next, speechStart, speechEnd, bargeIn };
 }
 
-export function interpretRealtimeEvent(event: { type?: string; delta?: string; transcript?: string }): {
-  kind: 'audio' | 'user' | 'assistant' | 'speech_started' | 'done' | 'ignore';
+export interface RealtimeRead {
+  kind:
+    | 'audio'
+    | 'user'
+    | 'assistant'
+    | 'speech_started'
+    | 'speech_stopped'
+    | 'audio_done'
+    | 'done'
+    | 'ignore';
   text: string;
   cumulative: boolean;
   final: boolean;
-} {
+  itemId: string;
+}
+
+export function interpretRealtimeEvent(event: {
+  type?: string;
+  delta?: string;
+  transcript?: string;
+  item_id?: string;
+  item?: { id?: string };
+}): RealtimeRead {
   const type = event.type || '';
   const delta = event.delta || '';
   const transcript = event.transcript || '';
+  const itemId = event.item_id || event.item?.id || '';
+  const base = { text: '', cumulative: false, final: false, itemId };
   if (type === 'response.output_audio.delta' || type === 'response.audio.delta') {
-    return { kind: 'audio', text: delta, cumulative: false, final: false };
+    return { ...base, kind: 'audio', text: delta };
   }
   if (type === 'input_audio_buffer.speech_started') {
-    return { kind: 'speech_started', text: '', cumulative: false, final: false };
+    return { ...base, kind: 'speech_started' };
+  }
+  if (type === 'input_audio_buffer.speech_stopped') {
+    return { ...base, kind: 'speech_stopped' };
+  }
+  if (type === 'response.output_audio.done') {
+    return { ...base, kind: 'audio_done', final: true };
   }
   if (type === 'conversation.item.input_audio_transcription.updated') {
-    return { kind: 'user', text: transcript || delta, cumulative: true, final: false };
+    return { ...base, kind: 'user', text: transcript || delta, cumulative: true };
   }
   if (type === 'conversation.item.input_audio_transcription.completed') {
-    return { kind: 'user', text: transcript || delta, cumulative: true, final: true };
+    return { ...base, kind: 'user', text: transcript || delta, cumulative: true, final: true };
   }
   if (
     type === 'response.output_audio_transcript.delta' ||
     type === 'response.audio_transcript.delta'
   ) {
-    return { kind: 'assistant', text: delta || transcript, cumulative: false, final: false };
+    return { ...base, kind: 'assistant', text: delta || transcript };
   }
   if (type === 'response.output_audio_transcript.done') {
-    return { kind: 'assistant', text: transcript || delta, cumulative: true, final: true };
+    return { ...base, kind: 'assistant', text: transcript || delta, cumulative: true, final: true };
   }
   if (type === 'response.done') {
-    return { kind: 'done', text: '', cumulative: false, final: true };
+    return { ...base, kind: 'done', final: true };
   }
-  return { kind: 'ignore', text: '', cumulative: false, final: false };
+  return { ...base, kind: 'ignore' };
 }
 
 export function encodeWav(samples: Float32Array, sampleRate: number): string {
@@ -247,6 +287,152 @@ export const sendVoiceTurn = (body: {
   messages?: { role: string; content: string }[];
 }) => readJson<VoiceTurn>('/v1/personal/voice/turn', body);
 
+export function chunkSampleCount(sampleRate = TARGET_SAMPLE_RATE): number {
+  return Math.round(sampleRate * (CHUNK_MS / 1000));
+}
+
+export function resampleLinear(
+  input: Float32Array,
+  fromRate: number,
+  toRate: number,
+): Float32Array {
+  if (!input.length || fromRate === toRate) return input;
+  const ratio = fromRate / toRate;
+  const length = Math.max(1, Math.round(input.length / ratio));
+  const out = new Float32Array(length);
+  for (let index = 0; index < length; index += 1) {
+    const position = index * ratio;
+    const left = Math.floor(position);
+    const right = Math.min(left + 1, input.length - 1);
+    const mix = position - left;
+    out[index] = input[left] * (1 - mix) + input[right] * mix;
+  }
+  return out;
+}
+
+export function floatToPcm16(samples: Float32Array): ArrayBuffer {
+  const pcm = new Int16Array(samples.length);
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[index]));
+    pcm[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+  }
+  return pcm.buffer;
+}
+
+export function bargePlayback(
+  clock: { next: number; startedAt: number },
+  currentTime: number,
+): { next: number; playedMs: number } {
+  const playedMs = clock.startedAt
+    ? Math.max(0, Math.round((currentTime - clock.startedAt) * 1000))
+    : 0;
+  return { next: currentTime, playedMs };
+}
+
+export function timeToFirstAudio(speechStoppedAt: number, firstAudioAt: number): number {
+  if (!speechStoppedAt) return 0;
+  return Math.max(0, firstAudioAt - speechStoppedAt);
+}
+
+const voiceMetricLog: { name: string; value: number }[] = [];
+
+export function recordMetric(name: string, value: number): void {
+  voiceMetricLog.push({ name, value });
+  console.info(`[jarvis-voice] ${name}`, value);
+}
+
+export function voiceMetrics(): { name: string; value: number }[] {
+  return voiceMetricLog.slice();
+}
+
+export function resetVoiceMetrics(): void {
+  voiceMetricLog.length = 0;
+}
+
+export function splitSentences(text: string, final = false): { ready: string[]; rest: string } {
+  const ready: string[] = [];
+  const pattern = /(?<!\d)[.!?]["']?(?=\s|$)/g;
+  let start = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text))) {
+    const piece = text.slice(start, match.index + match[0].length).trim();
+    if (piece) ready.push(piece);
+    start = match.index + match[0].length;
+  }
+  let rest = text.slice(start);
+  if (final && rest.trim()) {
+    ready.push(rest.trim());
+    rest = '';
+  }
+  return { ready, rest };
+}
+
+export function parseSseChunk(buffer: string): {
+  events: { event: string; data: string }[];
+  rest: string;
+} {
+  const events: { event: string; data: string }[] = [];
+  const parts = buffer.split('\n\n');
+  const rest = parts.pop() ?? '';
+  parts.forEach((part) => {
+    let event = 'message';
+    const dataLines: string[] = [];
+    part.split('\n').forEach((line) => {
+      if (line.startsWith('event:')) event = line.slice(6).trim();
+      else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+    });
+    if (dataLines.length) events.push({ event, data: dataLines.join('\n') });
+  });
+  return { events, rest };
+}
+
+export function pickSpokenVoice(
+  voices: { name: string; lang: string; default?: boolean }[],
+): { name: string; lang: string; default?: boolean } | null {
+  const preferred = ['Samantha', 'Ava', 'Allison', 'Zoe', 'Daniel', 'Karen', 'Google US English'];
+  for (const name of preferred) {
+    const found = voices.find((voice) => voice.lang.startsWith('en') && voice.name.includes(name));
+    if (found) return found;
+  }
+  return (
+    voices.find((voice) => voice.lang.startsWith('en') && !voice.default) ||
+    voices.find((voice) => !voice.default) ||
+    voices[0] ||
+    null
+  );
+}
+
+export const PCM_WORKLET = `
+class PcmCaptureProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.pending = 0;
+    this.chunks = [];
+    this.target = Math.round(sampleRate * 0.06);
+  }
+  process(inputs) {
+    const channel = inputs[0] && inputs[0][0];
+    if (!channel || !channel.length) return true;
+    const copy = new Float32Array(channel);
+    this.chunks.push(copy);
+    this.pending += copy.length;
+    if (this.pending >= this.target) {
+      const merged = new Float32Array(this.pending);
+      let offset = 0;
+      for (const chunk of this.chunks) {
+        merged.set(chunk, offset);
+        offset += chunk.length;
+      }
+      this.port.postMessage(merged);
+      this.chunks = [];
+      this.pending = 0;
+    }
+    return true;
+  }
+}
+registerProcessor('pcm-capture', PcmCaptureProcessor);
+`;
+
 export const recordVoiceUsage = (body: {
   mode: string;
   provider: string;
@@ -256,3 +442,21 @@ export const recordVoiceUsage = (body: {
   model?: string;
   specialist_id?: string;
 }) => readJson<{ amount: number; recorded: boolean }>('/v1/personal/voice/usage', body);
+
+export const postVoiceMetric = (name: string, value: number) =>
+  readJson<{ ok: boolean }>('/v1/personal/voice/metrics', { name, value });
+
+export const openVoiceStream = (body: {
+  audio_base64?: string;
+  practice?: boolean;
+  provider: string;
+  private?: boolean;
+  eli5?: boolean;
+  world_id?: string;
+  messages?: { role: string; content: string }[];
+}) =>
+  apiFetch('/v1/personal/voice/turn/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
