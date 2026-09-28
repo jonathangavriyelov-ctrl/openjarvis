@@ -685,17 +685,46 @@ def personal_voice_stream(body: VoiceTurnRequest, request: Request):
             raise HTTPException(
                 status_code=400, detail="That audio could not be read."
             ) from exc
+    office = _office_from_app(request)
+    private = body.private
+
+    def budget_blocks(prompt: str) -> bool:
+        if not body.world_id:
+            return False
+        action, _estimate = office.roi.decide(
+            body.world_id, "chief_of_staff", prompt
+        )
+        return action != "ok"
+
+    def ledger(
+        provider: str,
+        model: str,
+        prompt: str,
+        text: str,
+        usage: dict[str, Any],
+    ) -> None:
+        office._record_llm(
+            body.world_id,
+            "chief_of_staff" if body.world_id else "desk",
+            model,
+            prompt,
+            text,
+            usage,
+        )
+
     events = iter_voice_events(
         audio=audio,
         transcript=body.transcript,
         practice=body.practice,
         provider=body.provider or "grok",
-        private=body.private,
+        private=private,
         eli5=body.eli5,
         messages=body.messages,
         engine=getattr(request.app.state, "engine", None),
         caller=getattr(request.app.state, "chat_caller", None),
         transcriber=getattr(request.app.state, "voice_transcriber", None),
+        budget_blocks=budget_blocks,
+        ledger=ledger,
     )
     return StreamingResponse(events, media_type="text/event-stream")
 

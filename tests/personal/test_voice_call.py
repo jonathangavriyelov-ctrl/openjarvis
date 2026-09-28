@@ -32,11 +32,13 @@ def _quiet_voice(monkeypatch):
     _cache.kokoro = None
     _cache.kokoro_used = 0.0
     _cache.kokoro_unavailable = False
+    _cache.say_voice = None
     clear_needs_credits()
     yield
     _cache.whisper = None
     _cache.kokoro = None
     _cache.kokoro_unavailable = False
+    _cache.say_voice = None
     clear_needs_credits()
 
 
@@ -159,6 +161,10 @@ def test_stub_returns_the_local_path_even_with_a_key(monkeypatch):
 
 def test_local_turn_uses_the_transcriber_and_the_selected_brain(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setattr(
+        "openjarvis.personal.voice_call.synthesize_speech",
+        lambda text: (b"", "none"),
+    )
     result = run_local_turn(
         audio=b"not-real-audio",
         provider="claude",
@@ -473,3 +479,98 @@ def test_kokoro_unloads_after_it_sits_idle():
     release_idle_models(now=_IDLE_SECONDS)
     assert _cache.kokoro is None
     assert closed == [True]
+
+
+def test_say_lists_voices_once_per_process(monkeypatch):
+    from openjarvis.personal import voice_call
+
+    calls: list[list[str]] = []
+
+    class _Result:
+        stdout = "Fred en_US\nSamantha en_US\n"
+
+    def run(command, **kwargs):
+        del kwargs
+        calls.append(list(command))
+        return _Result()
+
+    monkeypatch.setattr(voice_call.shutil, "which", lambda name: "/usr/bin/say")
+    monkeypatch.setattr(voice_call.subprocess, "run", run)
+    voice_call._say_wav("Hello.")
+    voice_call._say_wav("Again.")
+    listings = [command for command in calls if command[:3] == ["say", "-v", "?"]]
+    assert listings == [["say", "-v", "?"]]
+    assert _cache.say_voice == "Samantha"
+
+
+def test_streamed_text_model_is_charged_to_the_world(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from openjarvis.personal import voice_call
+    from openjarvis.personal.gate import OsGateMiddleware
+    from openjarvis.personal.office import PersonalOffice
+    from openjarvis.personal.routes import mount_personal
+
+    monkeypatch.setenv("XAI_API_KEY", "xai-stream-secret")
+    monkeypatch.setenv("OPENJARVIS_HOME", str(tmp_path / "oj-home"))
+    monkeypatch.delenv("OPENJARVIS_API_KEY", raising=False)
+    monkeypatch.setattr(
+        voice_call, "synthesize_speech", lambda text: (b"", "none")
+    )
+    seen: dict[str, object] = {}
+
+    class _Stream:
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self):
+            yield 'data: {"choices":[{"delta":{"content":"Hello there."}}]}'
+            yield 'data: {"usage":{"prompt_tokens":11,"completion_tokens":4}}'
+            yield "data: [DONE]"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def stream(method, url, headers=None, json=None, timeout=None):
+        del method, headers, timeout
+        seen["url"] = url
+        seen["body"] = json
+        return _Stream()
+
+    monkeypatch.setattr(voice_call.httpx, "stream", stream)
+    office = PersonalOffice(tmp_path / "os.db")
+    world_id = office.store.list_worlds()[0]["id"]
+    app = FastAPI()
+    app.state.personal_office = office
+    app.add_middleware(OsGateMiddleware)
+    mount_personal(app)
+    client = TestClient(app)
+    try:
+        setup = client.post(
+            "/v1/personal/auth/setup",
+            json={"password": "correct-horse"},
+        )
+        assert setup.status_code == 200, setup.text
+        response = client.post(
+            "/v1/personal/voice/turn/stream",
+            json={
+                "transcript": "What time is it?",
+                "provider": "grok",
+                "world_id": world_id,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert "Hello there." in response.text
+        assert seen["body"]["max_tokens"] == 220
+        assert "xai-stream-secret" not in response.text
+        report = office.roi.report()
+        worlds = {row["id"]: row for row in report["worlds"]}
+        assert worlds[world_id]["llm"] > 0
+        assert report["overall"]["llm"] == worlds[world_id]["llm"]
+        assert report["overall"]["voice"] == 0
+    finally:
+        office.close()

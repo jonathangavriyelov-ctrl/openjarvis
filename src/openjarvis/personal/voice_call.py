@@ -85,6 +85,7 @@ class _ModelCache:
         self.kokoro: Any = None
         self.kokoro_used = 0.0
         self.kokoro_unavailable = False
+        self.say_voice: str | None = None
 
 
 _cache = _ModelCache()
@@ -583,9 +584,10 @@ def choose_say_voice(listing: str) -> str:
     return names[0] if names else ""
 
 
-def _say_wav(text: str) -> bytes:
-    if not text.strip() or shutil.which("say") is None:
-        return b""
+def _chosen_say_voice() -> str:
+    """List installed macOS voices once. Repeating that costs about half a second."""
+    if _cache.say_voice is not None:
+        return _cache.say_voice
     listing = ""
     try:
         listed = subprocess.run(
@@ -598,7 +600,14 @@ def _say_wav(text: str) -> bytes:
         listing = listed.stdout or ""
     except Exception:
         listing = ""
-    voice = choose_say_voice(listing)
+    _cache.say_voice = choose_say_voice(listing)
+    return _cache.say_voice
+
+
+def _say_wav(text: str) -> bytes:
+    if not text.strip() or shutil.which("say") is None:
+        return b""
+    voice = _chosen_say_voice()
     path = ""
     try:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
@@ -746,8 +755,34 @@ def _turn_payload(
     }
 
 
+def _token_count(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value < 0:
+        return None
+    return int(value)
+
+
+def _remember_usage(
+    usage: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    input_key: str,
+    output_key: str,
+) -> None:
+    incoming = _token_count(payload.get(input_key))
+    outgoing = _token_count(payload.get(output_key))
+    if incoming is not None:
+        usage["input_tokens"] = incoming
+    if outgoing is not None:
+        usage["output_tokens"] = outgoing
+
+
 def _iter_cloud_deltas(
-    provider: str, model: str, messages: list[dict[str, str]]
+    provider: str,
+    model: str,
+    messages: list[dict[str, str]],
+    usage: dict[str, Any],
 ) -> Iterator[str]:
     """Stream one provider. Raise AttemptFailed so the caller can fall back."""
     from openjarvis.chat_switch import PROVIDERS, AttemptFailed
@@ -784,8 +819,11 @@ def _iter_cloud_deltas(
         }
         if model.startswith("gpt-6"):
             payload["reasoning_effort"] = "none"
+        payload["stream_options"] = {"include_usage": True}
         base = (
-            "https://api.x.ai/v1" if provider == "grok" else "https://api.openai.com/v1"
+            "https://api.x.ai/v1"
+            if provider == "grok"
+            else "https://api.openai.com/v1"
         )
         stream_cm = httpx.stream(
             "POST",
@@ -799,6 +837,7 @@ def _iter_cloud_deltas(
         )
     with stream_cm as stream:
         stream.raise_for_status()
+        usage["streamed"] = True
         for line in stream.iter_lines():
             if not line or not line.startswith("data:"):
                 continue
@@ -810,10 +849,30 @@ def _iter_cloud_deltas(
             except json.JSONDecodeError:
                 continue
             if provider == "claude":
+                if event.get("type") == "message_start":
+                    _remember_usage(
+                        usage,
+                        (event.get("message") or {}).get("usage") or {},
+                        input_key="input_tokens",
+                        output_key="output_tokens",
+                    )
+                elif event.get("type") == "message_delta":
+                    _remember_usage(
+                        usage,
+                        event.get("usage") or {},
+                        input_key="input_tokens",
+                        output_key="output_tokens",
+                    )
                 if event.get("type") != "content_block_delta":
                     continue
                 delta = (event.get("delta") or {}).get("text") or ""
             else:
+                _remember_usage(
+                    usage,
+                    event.get("usage") or {},
+                    input_key="prompt_tokens",
+                    output_key="completion_tokens",
+                )
                 choices = event.get("choices") or []
                 delta = ""
                 if choices:
@@ -830,8 +889,10 @@ def iter_answer_deltas(
     eli5: bool = False,
     engine: Any = None,
     caller: Any = None,
+    usage: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], Iterator[str]]:
     """Reply metadata plus text deltas. A stub never calls a live provider."""
+    box = usage if usage is not None else {}
     choice = "local" if private else normalize_choice(provider)
     if os.environ.get("OPENJARVIS_VOICE_STUB") == "1":
         reply = {
@@ -871,9 +932,12 @@ def iter_answer_deltas(
     def _deltas() -> Iterator[str]:
         if first != "local":
             try:
-                yield from _iter_cloud_deltas(first, model_for(first), messages)
+                yield from _iter_cloud_deltas(
+                    first, model_for(first), messages, box
+                )
                 return
             except Exception:
+                box.clear()
                 logger.debug("voice stream fell back", exc_info=True)
         reply_now = answer_chat(
             messages,
@@ -909,6 +973,8 @@ def iter_voice_events(
     engine: Any = None,
     caller: Any = None,
     transcriber: Transcriber | None = None,
+    budget_blocks: Callable[[str], bool] | None = None,
+    ledger: Callable[[str, str, str, str, dict[str, Any]], None] | None = None,
 ) -> Iterator[str]:
     """SSE events: transcript, one sentence at a time, then done."""
     choice = "local" if private else normalize_choice(provider)
@@ -940,6 +1006,11 @@ def iter_voice_events(
                 }
             )
     history.append({"role": "user", "content": heard})
+    if budget_blocks is not None and not private and not stub:
+        if budget_blocks(heard):
+            private = True
+            choice = "local"
+    usage: dict[str, Any] = {}
     reply, deltas = iter_answer_deltas(
         history[-12:],
         choice,
@@ -947,6 +1018,7 @@ def iter_voice_events(
         eli5=eli5,
         engine=engine,
         caller=caller,
+        usage=usage,
     )
     yield _sse("transcript", {"text": heard})
     buffer = ""
@@ -962,6 +1034,14 @@ def iter_voice_events(
         yield _sse("sentence", _sentence_event(buffer.strip(), stub=stub))
     reply = dict(reply)
     reply["content"] = " ".join(spoken)
+    if ledger is not None and usage.get("streamed"):
+        ledger(
+            str(reply.get("provider") or ""),
+            str(reply.get("model") or ""),
+            heard,
+            str(reply.get("content") or ""),
+            usage,
+        )
     yield _sse(
         "done",
         {
