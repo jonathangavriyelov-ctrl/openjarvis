@@ -1,0 +1,56 @@
+[
+  {
+    "id": "assistant",
+    "name": "Assistant",
+    "world": "Personal",
+    "role": "Runs point for the whole CMD center."
+  },
+  {
+    "id": "qf-crm",
+    "name": "QF CRM",
+    "world": "Quick Funders",
+    "role": "Builds the Quick Funders CRM: Underwriting, Offers, and Reminders."
+  },
+  {
+    "id": "lead-fixer",
+    "name": "Lead Fixer",
+    "world": "Quick Funders",
+    "role": "Fixes leads in the Quick Funders CRM."
+  },
+  {
+    "id": "submissions",
+    "name": "Submissions",
+    "world": "Quick Funders",
+    "role": "Handles Quick Funders funding submissions."
+  },
+  {
+    "id": "crm-team",
+    "name": "CRM Team",
+    "world": "Quick Funders",
+    "role": "Quick Funders CRM work."
+  },
+  {
+    "id": "agent-watch",
+    "name": "Agent Watch",
+    "world": "Quick Funders",
+    "role": "Read-only hourly watcher of how sales agents work leads."
+  },
+  {
+    "id": "self-audit",
+    "name": "Self Audit",
+    "world": "Self Financial Audit",
+    "role": "Builds the Self Audit app."
+  },
+  {
+    "id": "robinhood",
+    "name": "Robinhood",
+    "world": "Personal",
+    "role": "Robinhood and stocks work."
+  },
+  {
+    "id": "jarvis-set-up",
+    "name": "Jarvis Set Up",
+    "world": "Personal",
+    "role": "Sets up, fixes, and connects Jarvis itself."
+  }
+]

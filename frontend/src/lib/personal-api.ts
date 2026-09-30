@@ -693,6 +693,47 @@ export const pullDrive = (query: string, worldId?: string | null) =>
     body: JSON.stringify({ query, world_id: worldId || '' }),
   });
 
+export interface CrmDeal {
+  id: string;
+  business: string;
+  stage: string;
+  consent: string;
+  next_action: string;
+  next_action_on: string;
+  amount: number;
+  industry: string;
+  created_at: string;
+  untouched?: boolean;
+  phone?: string;
+  email?: string;
+  underwriting_note?: string;
+  response_minutes?: number;
+}
+
+export interface CrmSnapshot {
+  connection: {
+    mode: string;
+    read_only_url: string;
+    live_read: boolean;
+    label: string;
+  };
+  role: string;
+  roles: { id: string; label: string; detail: string }[];
+  stages: string[];
+  deals: CrmDeal[];
+  missing_next_action: string[];
+  alerts: { kind: string; deal_id: string; business: string; text: string }[];
+  funders: { id: string; name: string; looks_for: string; fits: string[] }[];
+  metrics: { response_minutes: number; funded_count: number; funded_volume: number };
+  audit: { at: string; actor: string; deal_id: string; change: string }[];
+  bots: { id: string; name: string; world: string; role: string }[];
+  team_brief: string;
+  checklist: string[];
+}
+
+export const fetchCrm = (role = 'owner') =>
+  read<CrmSnapshot>(`/v1/personal/crm?role=${encodeURIComponent(role)}`);
+
 export function routeLabel(model: ModelChoice | null | undefined): string {
   if (!model || model.source === 'offline' || !model.model_id) return 'Local notes';
   const name = model.model_id;

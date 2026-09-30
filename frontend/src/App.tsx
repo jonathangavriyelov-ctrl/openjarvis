@@ -17,6 +17,7 @@ import { GoalsPage } from './pages/personal/GoalsPage';
 import { SecondBrainPage } from './pages/personal/SecondBrainPage';
 import { KnowledgePage } from './pages/personal/KnowledgePage';
 import { DeliverablesPage } from './pages/personal/DeliverablesPage';
+import { CrmPage } from './pages/personal/CrmPage';
 import { CommandPalette } from './components/CommandPalette';
 import { SetupScreen } from './components/SetupScreen';
 import { Toaster } from './components/ui/sonner';
@@ -243,6 +244,7 @@ export default function App() {
           <Route path="os/brain" element={<SecondBrainPage />} />
           <Route path="os/feed" element={<KnowledgePage />} />
           <Route path="os/library" element={<DeliverablesPage />} />
+          <Route path="os/crm" element={<CrmPage />} />
           <Route path="memory" element={<MemoryHubPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="get-started" element={<GetStartedPage />} />

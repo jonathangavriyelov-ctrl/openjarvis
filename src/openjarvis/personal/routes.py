@@ -1009,6 +1009,14 @@ class RoiSettingsRequest(BaseModel):
     recurring: Optional[list[dict[str, Any]]] = None
 
 
+@personal_router.get("/crm")
+def personal_crm(role: str = "owner") -> dict[str, Any]:
+    """Sample MCA board. Nothing here is written to a live CRM."""
+    from openjarvis.personal.crm_view import crm_snapshot
+
+    return crm_snapshot(role)
+
+
 @personal_router.get("/roi")
 def personal_roi(request: Request) -> dict[str, Any]:
     return _office_from_app(request).roi.report()
