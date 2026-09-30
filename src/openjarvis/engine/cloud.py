@@ -1,6 +1,6 @@
 """Cloud inference engine.
 
-OpenAI, Anthropic, Google, MiniMax, and DeepSeek API backends.
+OpenAI, Anthropic, xAI, Google, MiniMax, and DeepSeek API backends.
 """
 
 from __future__ import annotations
@@ -55,6 +55,19 @@ PRICING: Dict[str, tuple[float, float]] = {
     "MiniMax-M2.5-highspeed": (0.60, 2.40),
     "deepseek-v4-flash": (0.27, 1.10),
     "deepseek-v4-pro": (0.55, 2.19),
+    "grok-3-mini": (0.30, 0.50),
+    "grok-2": (2.00, 10.00),
+    "grok-3": (3.00, 15.00),
+    "grok-4": (3.00, 15.00),
+    "grok-4.7": (3.00, 15.00),
+    "grok-4.3": (3.00, 15.00),
+    "grok-4.20-0309-non-reasoning": (3.00, 15.00),
+    "claude-opus-5-5": (5.00, 25.00),
+    "claude-sonnet-5": (3.00, 15.00),
+    "claude-fable-5-1": (10.00, 50.00),
+    "gpt-6-sol": (5.00, 30.00),
+    "gpt-6-astra": (2.50, 10.00),
+    "gpt-6-luna": (0.50, 2.00),
 }
 
 _MINIMAX_M3_LONG_CONTEXT_THRESHOLD = 512_000
@@ -68,6 +81,9 @@ _OPENAI_MODELS = [
     "gpt-5.4",
     "gpt-5-mini",
     "o3-mini",
+    "gpt-6-sol",
+    "gpt-6-astra",
+    "gpt-6-luna",
 ]
 _ANTHROPIC_MODELS = [
     "claude-sonnet-4-20250514",
@@ -77,6 +93,9 @@ _ANTHROPIC_MODELS = [
     "claude-sonnet-4-6",
     "claude-haiku-4-5",
     "claude-haiku-4-5-20251001",
+    "claude-opus-5-5",
+    "claude-sonnet-5",
+    "claude-fable-5-1",
 ]
 _GOOGLE_MODELS = [
     "gemini-2.5-pro",
@@ -97,6 +116,15 @@ _MINIMAX_MODELS = [
 _DEEPSEEK_MODELS = [
     "deepseek-v4-flash",
     "deepseek-v4-pro",
+]
+_XAI_MODELS = [
+    "grok-3",
+    "grok-3-mini",
+    "grok-4",
+    "grok-2",
+    "grok-4.7",
+    "grok-4.3",
+    "grok-4.20-0309-non-reasoning",
 ]
 
 # OpenRouter models — prefixed with "openrouter/" so they can be identified
@@ -128,6 +156,10 @@ def _is_minimax_model(model: str) -> bool:
 
 def _is_deepseek_model(model: str) -> bool:
     return model.lower().startswith("deepseek")
+
+
+def _is_xai_model(model: str) -> bool:
+    return model.lower().startswith("grok-") and not _is_openrouter_model(model)
 
 
 def _is_openrouter_model(model: str) -> bool:
@@ -173,6 +205,12 @@ def _is_openai_model(model: str) -> bool:
     if m in (name.lower() for name in _OPENAI_MODELS):
         return True
     return m.startswith(_OPENAI_PREFIXES)
+
+
+def _apply_gpt6_effort(model: str, create_kwargs: Dict[str, Any]) -> None:
+    """gpt-6 tool calls need reasoning_effort none on chat completions."""
+    if model.startswith("gpt-6") and "reasoning_effort" not in create_kwargs:
+        create_kwargs["reasoning_effort"] = "none"
 
 
 def _is_openai_reasoning_model(model: str) -> bool:
@@ -342,13 +380,14 @@ def _convert_tools_to_google(
 
 @EngineRegistry.register("cloud")
 class CloudEngine(InferenceEngine):
-    """Cloud inference via OpenAI, Anthropic, Google, MiniMax, and DeepSeek SDKs."""
+    """Cloud inference via OpenAI, Anthropic, xAI, Google, MiniMax, and DeepSeek."""
 
     engine_id = "cloud"
     is_cloud = True
 
     def __init__(self) -> None:
         self._openai_client: Any = None
+        self._xai_client: Any = None
         self._anthropic_client: Any = None
         self._google_client: Any = None
         self._openrouter_client: Any = None
@@ -365,6 +404,17 @@ class CloudEngine(InferenceEngine):
                 import openai
 
                 self._openai_client = openai.OpenAI()
+            except ImportError:
+                pass
+        xai_key = os.environ.get("XAI_API_KEY")
+        if xai_key:
+            try:
+                import openai
+
+                self._xai_client = openai.OpenAI(
+                    base_url="https://api.x.ai/v1",
+                    api_key=xai_key,
+                )
             except ImportError:
                 pass
         if os.environ.get("ANTHROPIC_API_KEY"):
@@ -592,12 +642,16 @@ class CloudEngine(InferenceEngine):
         model: str,
         temperature: float,
         max_tokens: int,
+        client: Any = None,
+        provider_name: str = "OpenAI",
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        if self._openai_client is None:
+        active = self._openai_client if client is None else client
+        if active is None:
+            env_name = "XAI_API_KEY" if provider_name == "xAI" else "OPENAI_API_KEY"
             raise EngineConnectionError(
-                "OpenAI client not available — set "
-                "OPENAI_API_KEY and install "
+                f"{provider_name} client not available — set "
+                f"{env_name} and install "
                 "openjarvis[inference-cloud]"
             )
         # Extract response_format before spreading kwargs into create_kwargs
@@ -610,6 +664,7 @@ class CloudEngine(InferenceEngine):
         }
         if not _is_openai_reasoning_model(model):
             create_kwargs["temperature"] = temperature
+        _apply_gpt6_effort(model, create_kwargs)
 
         # Apply structured output / JSON mode
         if response_format is not None:
@@ -632,7 +687,7 @@ class CloudEngine(InferenceEngine):
 
         t0 = time.monotonic()
         try:
-            resp = self._openai_client.chat.completions.create(**create_kwargs)
+            resp = active.chat.completions.create(**create_kwargs)
         except Exception as exc:
             # Some models reject a non-default temperature with a 400
             # unsupported_value (see #426). Retry once without it rather
@@ -641,11 +696,11 @@ class CloudEngine(InferenceEngine):
                 exc
             ):
                 create_kwargs.pop("temperature", None)
-                resp = self._openai_client.chat.completions.create(**create_kwargs)
+                resp = active.chat.completions.create(**create_kwargs)
             else:
                 raise
         elapsed = time.monotonic() - t0
-        choice = _first_choice_or_raise(resp, provider="OpenAI", model=model)
+        choice = _first_choice_or_raise(resp, provider=provider_name, model=model)
         usage = resp.usage
         prompt_tokens = usage.prompt_tokens if usage else 0
         completion_tokens = usage.completion_tokens if usage else 0
@@ -1143,6 +1198,10 @@ class CloudEngine(InferenceEngine):
             return self._generate_minimax(messages, **kw)
         if _is_deepseek_model(model):
             return self._generate_deepseek(messages, **kw)
+        if _is_xai_model(model):
+            return self._generate_openai(
+                messages, client=self._xai_client, provider_name="xAI", **kw
+            )
         if _is_anthropic_model(model):
             return self._generate_anthropic(messages, **kw)
         if _is_google_model(model):
@@ -1175,6 +1234,11 @@ class CloudEngine(InferenceEngine):
                 yield token
         elif _is_deepseek_model(model):
             async for token in self._stream_deepseek(messages, **kw):
+                yield token
+        elif _is_xai_model(model):
+            async for token in self._stream_openai(
+                messages, client=self._xai_client, provider_name="xAI", **kw
+            ):
                 yield token
         elif _is_anthropic_model(model):
             async for token in self._stream_anthropic(messages, **kw):
@@ -1249,10 +1313,13 @@ class CloudEngine(InferenceEngine):
         model: str,
         temperature: float,
         max_tokens: int,
+        client: Any = None,
+        provider_name: str = "OpenAI",
         **kwargs: Any,
     ) -> AsyncIterator[str]:
-        if self._openai_client is None:
-            raise EngineConnectionError("OpenAI client not available")
+        active = self._openai_client if client is None else client
+        if active is None:
+            raise EngineConnectionError(f"{provider_name} client not available")
         create_kwargs: Dict[str, Any] = {
             "model": model,
             "messages": messages_to_dicts(messages),
@@ -1262,7 +1329,7 @@ class CloudEngine(InferenceEngine):
         }
         if not _is_openai_reasoning_model(model):
             create_kwargs["temperature"] = temperature
-        resp = self._openai_client.chat.completions.create(**create_kwargs)
+        resp = active.chat.completions.create(**create_kwargs)
         for chunk in resp:
             delta = chunk.choices[0].delta if chunk.choices else None
             if delta and delta.content:
@@ -1625,6 +1692,19 @@ class CloudEngine(InferenceEngine):
                 "stream": True,
                 **kwargs,
             }
+        elif _is_xai_model(model):
+            client = self._xai_client
+            if client is None:
+                raise EngineConnectionError("xAI client not available")
+            create_kwargs = {
+                "model": model,
+                "messages": messages_to_dicts(messages),
+                "max_completion_tokens": max_tokens,
+                "stream": True,
+                **kwargs,
+            }
+            if not _is_openai_reasoning_model(model):
+                create_kwargs["temperature"] = temperature
         elif _is_deepseek_model(model):
             client = self._deepseek_client
             if client is None:
@@ -1650,6 +1730,7 @@ class CloudEngine(InferenceEngine):
             }
             if not _is_openai_reasoning_model(model):
                 create_kwargs["temperature"] = temperature
+            _apply_gpt6_effort(model, create_kwargs)
         resp = client.chat.completions.create(**create_kwargs)
         for chunk in resp:
             choice = chunk.choices[0] if chunk.choices else None
@@ -1781,7 +1862,10 @@ class CloudEngine(InferenceEngine):
             max_tokens=max_tokens,
             **kwargs,
         )
-        if _is_anthropic_model(model):
+        if _is_xai_model(model):
+            async for chunk in self._stream_full_openai(messages, **kw):
+                yield chunk
+        elif _is_anthropic_model(model):
             async for chunk in self._stream_full_anthropic(messages, **kw):
                 yield chunk
         elif _is_google_model(model):
@@ -1795,6 +1879,8 @@ class CloudEngine(InferenceEngine):
         models: List[str] = []
         if self._openai_client is not None:
             models.extend(_OPENAI_MODELS)
+        if self._xai_client is not None:
+            models.extend(_XAI_MODELS)
         if self._anthropic_client is not None:
             models.extend(_ANTHROPIC_MODELS)
         if self._google_client is not None:
@@ -1830,6 +1916,8 @@ class CloudEngine(InferenceEngine):
             return self._minimax_client
         if _is_deepseek_model(model):
             return self._deepseek_client
+        if _is_xai_model(model):
+            return self._xai_client
         if _is_anthropic_model(model):
             return self._anthropic_client
         if _is_google_model(model):
@@ -1854,6 +1942,7 @@ class CloudEngine(InferenceEngine):
     def health(self) -> bool:
         return (
             self._openai_client is not None
+            or self._xai_client is not None
             or self._anthropic_client is not None
             or self._google_client is not None
             or self._openrouter_client is not None
@@ -1867,6 +1956,10 @@ class CloudEngine(InferenceEngine):
             if hasattr(self._openai_client, "close"):
                 self._openai_client.close()
             self._openai_client = None
+        if self._xai_client is not None:
+            if hasattr(self._xai_client, "close"):
+                self._xai_client.close()
+            self._xai_client = None
         if self._anthropic_client is not None:
             if hasattr(self._anthropic_client, "close"):
                 self._anthropic_client.close()

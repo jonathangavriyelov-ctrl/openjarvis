@@ -1,4 +1,8 @@
-.PHONY: setup build test lint format
+.PHONY: setup build test lint format os
+
+# Personal AI OS: API plus dashboard. Prints the URL. No API keys required.
+os:
+	bash scripts/os-up.sh
 
 # Mirrors .github/workflows/ci.yml so `make test` matches CI locally.
 

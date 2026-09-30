@@ -1,5 +1,6 @@
 import { DollarSign, TrendingDown, Cloud, HardDrive } from 'lucide-react';
 import { useAppStore } from '../../lib/store';
+import { HelpTip } from '../HelpTip';
 
 const CLOUD_PRICING = [
   { name: 'GPT-5.6 Sol', input: 5.00, output: 30.00 },
@@ -12,13 +13,17 @@ export function CostComparison() {
 
   if (!savings || savings.total_tokens === 0) {
     return (
-      <div className="hud-panel p-6">
-        <h3 className="hud-label flex items-center gap-2 mb-4">
-          <DollarSign size={12} style={{ color: 'var(--color-success)' }} />
-          Cost Comparison
+      <div className="hud-panel p-6" style={{ overflow: 'visible' }}>
+        <h3 className="text-sm font-semibold flex items-center gap-2 mb-1" style={{ color: 'var(--color-text)' }}>
+          <DollarSign size={14} style={{ color: 'var(--color-success)' }} />
+          Money saved vs. paying for cloud AI
+          <HelpTip above text="This compares electricity on your Mac with what a cloud company would charge for the same questions." />
         </h3>
+        <p className="text-xs mb-4" style={{ color: 'var(--color-text-secondary)' }}>
+          What you would have paid a cloud company for the same questions.
+        </p>
         <div className="h-48 flex items-center justify-center text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
-          <span className="hud-mono">awaiting first inference…</span>
+          <span>No savings yet. After you ask something, this compares your Mac with cloud prices.</span>
         </div>
       </div>
     );
@@ -28,32 +33,36 @@ export function CostComparison() {
   const completionK = savings.total_completion_tokens / 1000;
 
   return (
-    <div className="hud-panel p-6">
-      <h3 className="hud-label flex items-center gap-2 mb-4">
-        <DollarSign size={12} style={{ color: 'var(--color-success)' }} />
-        Cost Comparison*
+    <div className="hud-panel p-6" style={{ overflow: 'visible' }}>
+      <h3 className="text-sm font-semibold flex items-center gap-2 mb-1" style={{ color: 'var(--color-text)' }}>
+        <DollarSign size={14} style={{ color: 'var(--color-success)' }} />
+        Money saved vs. paying for cloud AI
+        <HelpTip above text="This compares electricity on your Mac with what a cloud company would charge for the same questions." />
       </h3>
+      <p className="text-xs mb-4" style={{ color: 'var(--color-text-secondary)' }}>
+        What you would have paid a cloud company for the same questions.
+      </p>
 
-      {/* Local stats */}
       <div
         className="flex items-center gap-3 p-3 rounded-lg mb-3"
         style={{ background: 'var(--color-accent-subtle)', border: '1px solid var(--color-accent)' }}
       >
         <HardDrive size={18} style={{ color: 'var(--color-accent)' }} />
         <div className="flex-1">
-          <div className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>
-            Local (your hardware)
+          <div className="text-sm font-medium flex items-center gap-2" style={{ color: 'var(--color-text)' }}>
+            On your Mac
+            <HelpTip above text="This is the electricity cost of answering on this computer, not a cloud bill." />
           </div>
           <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-            {savings.total_calls} requests &middot; {savings.total_tokens.toLocaleString()} tokens
+            {savings.total_calls} questions · {savings.total_tokens.toLocaleString()} tokens
           </div>
         </div>
         <div className="text-right">
           <div className="text-lg font-semibold" style={{ color: 'var(--color-success)' }}>
-            ${savings.local_cost.toFixed(4)}
+            {savings.local_cost.toFixed(2)} dollars
           </div>
-          <div className="text-[10px]" style={{ color: 'var(--color-text-tertiary)' }}>
-            electricity only
+          <div className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+            Electricity on this Mac.
           </div>
         </div>
       </div>
@@ -76,13 +85,14 @@ export function CostComparison() {
                 </div>
               </div>
               <div className="text-right">
-                <div className="text-sm font-mono" style={{ color: 'var(--color-text)' }}>
-                  ${cost.toFixed(4)}
+                <div className="text-sm" style={{ color: 'var(--color-text)' }}>
+                  {cost.toFixed(2)} dollars
                 </div>
                 {saved > 0 && (
-                  <div className="text-[10px] flex items-center gap-0.5 justify-end" style={{ color: 'var(--color-success)' }}>
+                  <div className="text-xs flex items-center gap-0.5 justify-end" style={{ color: 'var(--color-success)' }}>
                     <TrendingDown size={10} />
-                    ${saved.toFixed(4)} saved
+                    {saved.toFixed(2)} dollars saved
+                    <HelpTip above text="The difference between that cloud price and running the same questions on your Mac." />
                   </div>
                 )}
               </div>
@@ -93,7 +103,7 @@ export function CostComparison() {
 
       <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--color-border)' }}>
         <p className="text-[10px] leading-relaxed" style={{ color: 'var(--color-text-tertiary)' }}>
-          *Savings estimates assume local models (e.g. Qwen, Nemotron, Kimi) produce roughly the same number of tokens per request, on average, as closed-source cloud models.
+          These are estimates. They assume a local model writes about as much text per question as a cloud model.
         </p>
       </div>
     </div>

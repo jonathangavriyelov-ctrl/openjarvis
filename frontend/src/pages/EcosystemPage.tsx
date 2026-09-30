@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import {
   Activity, ArrowRight, Bot, Brain, Check, CircleHelp, Cpu, Database,
-  HardDrive, Layers3, Mic2, PlugZap, RefreshCw, ShieldCheck, Wallet,
+  Flower2, HardDrive, Layers3, Mic2, PlugZap, RefreshCw, ShieldCheck, Wallet,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { checkHealth, fetchManagedAgents, fetchSpeechHealth, getMemoryStats } from '../lib/api';
@@ -167,6 +167,7 @@ export function EcosystemPage() {
       <section className="ecosystem-next">
         <button onClick={() => navigate('/data-sources')}><Database size={20} /><span><strong>Connect data</strong><small>Review actual connected sources and local memory.</small></span><ArrowRight size={17} /></button>
         <button onClick={() => navigate('/agents')}><PlugZap size={20} /><span><strong>Set up agents</strong><small>Assign focused work to each assistant.</small></span><ArrowRight size={17} /></button>
+        <button onClick={() => navigate('/os/world')}><Flower2 size={20} /><span><strong>Open the eco world</strong><small>See the chief of staff and the specialist team.</small></span><ArrowRight size={17} /></button>
         <button onClick={() => navigate('/get-started')}><CircleHelp size={20} /><span><strong>Explore setup</strong><small>See the app’s available setup steps.</small></span><ArrowRight size={17} /></button>
       </section>
       <div className="ecosystem-footer"><Check size={15} /> Live badges reflect server responses. Planned workspaces are examples, not active integrations.</div>

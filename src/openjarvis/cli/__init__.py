@@ -121,6 +121,7 @@ if not _DATA_BOUNDARY_BOOTSTRAP:
     from openjarvis.cli.model import model
     from openjarvis.cli.operators_cmd import operators
     from openjarvis.cli.optimize_cmd import optimize_group
+    from openjarvis.cli.os_cmd import os_group
     from openjarvis.cli.pearl_cmd import pearl
     from openjarvis.cli.quickstart_cmd import quickstart
     from openjarvis.cli.registry_cmd import registry
@@ -157,6 +158,7 @@ if not _DATA_BOUNDARY_BOOTSTRAP:
     cli.add_command(vault, "vault")
     cli.add_command(add, "add")
     cli.add_command(operators, "operators")
+    cli.add_command(os_group, "os")
     cli.add_command(eval_group, "eval")
     cli.add_command(host, "host")
     cli.add_command(quickstart, "quickstart")

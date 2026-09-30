@@ -48,6 +48,61 @@ def test_server_model_prefers_reachable_configured_model() -> None:
     assert model == "mlx-community/Qwen2.5-7B-Instruct-4bit"
 
 
+def test_server_model_matches_tagged_ollama_family() -> None:
+    cfg = JarvisConfig()
+    cfg.server.model = "hermes3"
+    cfg.intelligence.default_model = ""
+    cfg.intelligence.fallback_model = ""
+
+    tagged = _resolve_server_model(
+        None,
+        config=cfg,
+        engine_name="ollama",
+        engine=_FakeEngine(["hermes3:8b"]),
+        all_models={"ollama": ["hermes3:8b"]},
+    )
+    hyphen = _resolve_server_model(
+        None,
+        config=cfg,
+        engine_name="ollama",
+        engine=_FakeEngine(["hermes3-8b"]),
+        all_models={},
+    )
+
+    assert tagged == "hermes3:8b"
+    assert hyphen == "hermes3-8b"
+
+
+def test_server_model_does_not_merge_dotted_or_registry_ids() -> None:
+    cfg = JarvisConfig()
+    cfg.server.model = "qwen3"
+    cfg.intelligence.default_model = ""
+    cfg.intelligence.fallback_model = "qwen3.5:4b"
+
+    dotted = _resolve_server_model(
+        None,
+        config=cfg,
+        engine_name="ollama",
+        engine=_FakeEngine(["qwen3.5:4b", "qwen3:8b"]),
+        all_models={},
+    )
+    assert dotted == "qwen3:8b"
+
+    cfg.server.model = "mlx-community/Qwen2.5-7B-Instruct-4bit"
+    cfg.intelligence.default_model = "mlx-community/Qwen2.5-7B-Instruct-4bit"
+    cfg.intelligence.fallback_model = "qwen3.5:9b"
+    other_quant = _resolve_server_model(
+        None,
+        config=cfg,
+        engine_name="multi",
+        engine=_FakeEngine(
+            ["mlx-community/Qwen2.5-7B-Instruct-8bit", "qwen3.5:9b"]
+        ),
+        all_models={},
+    )
+    assert other_quant == "qwen3.5:9b"
+
+
 def test_server_model_keeps_explicit_cli_model() -> None:
     cfg = JarvisConfig()
     cfg.server.model = "configured-model"

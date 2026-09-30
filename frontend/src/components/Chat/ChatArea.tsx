@@ -6,6 +6,7 @@ import { StreamingDots } from './StreamingDots';
 import { useAppStore } from '../../lib/store';
 import { Sparkles, PanelRightOpen, PanelRightClose, Database, MessageSquare, X } from 'lucide-react';
 import { listConnectors } from '../../lib/connectors-api';
+import { ProviderSwitcher } from './ProviderSwitcher';
 
 function getGreeting(): string {
   const hour = new Date().getHours();
@@ -76,7 +77,8 @@ export function ChatArea() {
   return (
     <div className="flex flex-col h-full">
       {/* Toggle bar */}
-      <div className="flex items-center justify-end px-3 py-1.5 shrink-0">
+      <div className="flex items-center justify-between px-3 py-1.5 shrink-0">
+        <ProviderSwitcher />
         <button
           onClick={toggleSystemPanel}
           className="p-1.5 rounded-md transition-colors cursor-pointer"

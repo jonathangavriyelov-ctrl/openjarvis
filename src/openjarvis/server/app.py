@@ -523,6 +523,16 @@ def create_app(
         except Exception as exc:
             logger.debug("Auth middleware init skipped: %s", exc)
 
+    # Desk password. Personal routes always require a session. The rest of
+    # the data API does too once a password exists, or when ``make os`` sets
+    # OPENJARVIS_PERSONAL_OS. /health stays open.
+    try:
+        from openjarvis.personal.gate import OsGateMiddleware
+
+        app.add_middleware(OsGateMiddleware)
+    except Exception as exc:
+        logger.debug("Desk gate init skipped: %s", exc)
+
     # Register CORS last so it is the outermost middleware. In addition to
     # handling preflights, this ensures browser clients can read 401 responses
     # produced directly by AuthMiddleware instead of seeing an opaque CORS
@@ -530,6 +540,7 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_origins,
+        allow_origin_regex=r"http://(127\.0\.0\.1|localhost):\d+",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

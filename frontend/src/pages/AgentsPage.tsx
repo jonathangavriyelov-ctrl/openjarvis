@@ -3774,28 +3774,28 @@ export function AgentsPage() {
                       <div style={{ width: 1, background: 'var(--color-border)' }} />
                       {/* Local Utilization */}
                       <div className="px-5">
-                        <p style={sectionTitle}>Local Utilization</p>
+                        <p style={sectionTitle}>Energy used by your Mac</p>
                         <div className="flex gap-5">
                           <div>
                             <p className="text-xl font-bold leading-none" style={{ color: 'var(--color-success)' }}>{fmtFlops}</p>
                             <p className="text-xs mt-1" style={{ color: 'var(--color-text-tertiary)' }}>Compute</p>
                           </div>
                           <div>
-                            <p className="text-xl font-bold leading-none" style={{ color: 'var(--color-success)' }}>{energyKj.toFixed(2)} kJ</p>
-                            <p className="text-xs mt-1" style={{ color: 'var(--color-text-tertiary)' }}>Energy</p>
+                            <p className="text-xl font-bold leading-none" style={{ color: 'var(--color-success)' }}>{energyKj.toFixed(2)} kilojoules</p>
+                            <p className="text-xs mt-1" style={{ color: 'var(--color-text-tertiary)' }}>Electricity for this agent’s answers.</p>
                           </div>
                         </div>
                       </div>
                       <div style={{ width: 1, background: 'var(--color-border)' }} />
                       {/* Dollars Saved */}
                       <div className="pl-5">
-                        <p style={sectionTitle}>Dollars Saved vs.</p>
+                        <p style={sectionTitle}>Money saved vs. paying for cloud AI</p>
                         <div className="flex gap-5">
                           {providers.map((p) => {
                             const cost = (inTok / 1e6) * p.inPer1M + (outTok / 1e6) * p.outPer1M;
                             return (
                               <div key={p.label}>
-                                <p className="text-xl font-bold leading-none" style={{ color: 'var(--color-success)' }}>${cost.toFixed(4)}</p>
+                                <p className="text-xl font-bold leading-none" style={{ color: 'var(--color-success)' }}>{cost.toFixed(2)} dollars</p>
                                 <p className="text-xs mt-1" style={{ color: 'var(--color-text-tertiary)' }}>{p.label}</p>
                               </div>
                             );

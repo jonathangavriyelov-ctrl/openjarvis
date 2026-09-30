@@ -25,6 +25,7 @@ _CLOUD_ENV_FILE = get_config_dir() / "cloud-keys.env"
 
 _OPENAI_PREFIXES = ("gpt-", "o1-", "o3-", "o4-", "chatgpt-")
 _ANTHROPIC_PREFIXES = ("claude-",)
+_XAI_PREFIXES = ("grok-",)
 _GOOGLE_PREFIXES = ("gemini-",)
 _MINIMAX_PREFIXES = ("MiniMax-",)
 
@@ -51,6 +52,7 @@ def _load_keys() -> dict[str, str]:
     for name in (
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
+        "XAI_API_KEY",
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
         "OPENROUTER_API_KEY",
@@ -68,6 +70,8 @@ def get_provider(model: str) -> str | None:
         return "openai"
     if any(model.startswith(p) for p in _ANTHROPIC_PREFIXES):
         return "anthropic"
+    if any(model.startswith(p) for p in _XAI_PREFIXES):
+        return "xai"
     if any(model.startswith(p) for p in _GOOGLE_PREFIXES):
         return "google"
     if any(model.startswith(p) for p in _MINIMAX_PREFIXES):
@@ -368,6 +372,17 @@ async def stream_cloud(
 
     elif provider == "anthropic":
         async for token in _stream_anthropic(model, messages, temperature, max_tokens):
+            yield token
+
+    elif provider == "xai":
+        async for token in _stream_openai(
+            model,
+            messages,
+            temperature,
+            max_tokens,
+            base_url="https://api.x.ai/v1",
+            api_key_name="XAI_API_KEY",
+        ):
             yield token
 
     elif provider == "google":
